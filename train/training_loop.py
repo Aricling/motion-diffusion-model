@@ -66,7 +66,7 @@ class TrainLoop:
 
         self.opt = AdamW(
             self.mp_trainer.master_params, lr=self.lr, weight_decay=self.weight_decay
-        )
+        )   # AdamW其实就是一个优化器，而不是调度器
         if self.resume_step:
             self._load_optimizer_state()
             # Model was resumed, either due to a restart or a checkpoint
@@ -221,7 +221,7 @@ class TrainLoop:
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 
             compute_losses = functools.partial(
-                self.diffusion.training_losses,
+                self.diffusion.training_losses, # 这个其实是所用的函数
                 self.ddp_model,
                 micro,  # [bs, ch, image_size, image_size]
                 t,  # [bs](int) sampled timesteps
