@@ -266,6 +266,17 @@ def add_evaluation_options(parser):
                        help="For classifier-free sampling - specifies the s parameter, as defined in the paper.")
 
 
+def add_motionbert_args(parser):
+    group = parser.add_argument_group('motionbert')
+    group.add_argument("--motionbert_config", type=str, default="/home/mengqing/usr/MotionBERT/configs/pretrain/MB_pretrain.yaml", help="Path to the config file.")
+    group.add_argument('-e_motionbert', '--evaluate_motionbert', default='/home/mengqing/usr/MotionBERT/checkpoint/pretrain/MB_pretrain/latest_epoch.bin', type=str, metavar='FILENAME', help='checkpoint to evaluate (file name)')
+    group.add_argument('-j', '--json_path', type=str, help='alphapose detection result json path')
+    group.add_argument('-v', '--vid_path', type=str, help='video path')
+    group.add_argument('-o', '--out_path', type=str, help='output path')
+    group.add_argument('--pixel', action='store_true', help='align with pixle coordinates')
+    group.add_argument('--focus', type=int, default=None, help='target person id')
+    group.add_argument('--clip_len', type=int, default=243, help='clip length for network input')
+
 def get_cond_mode(args):
     if args.unconstrained:
         cond_mode = 'no_cond'
@@ -283,7 +294,10 @@ def train_args():
     add_model_options(parser)
     add_diffusion_options(parser)
     add_training_options(parser)
+    add_motionbert_args(parser)
     return apply_rules(parser.parse_args())
+
+    
 
 
 def generate_args():

@@ -280,7 +280,7 @@ class Text2MotionDatasetV2(data.Dataset):
                     if flag:
                         data_dict[name] = {'motion': motion,
                                            'length': len(motion),
-                                           'text': text_data}
+                                           'text': text_data}   ## 这里对应的可能是有很多个的text
                         new_name_list.append(name)
                         length_list.append(len(motion))
                 except:

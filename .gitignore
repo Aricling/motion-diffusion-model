@@ -138,3 +138,5 @@ slurm**/
 *.err
 *.slurm
 .vscode/
+dataset/t2m_train.npy
+dataset/HumanML3D
