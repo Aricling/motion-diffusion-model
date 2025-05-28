@@ -362,15 +362,13 @@ class Text2MotionDatasetV2(data.Dataset):
             idx = random.randint(0, self.opt.unit_length)
         motion = motion[idx:idx+m_length]
 
-        "Z Normalization"
-        motion = (motion - self.mean) / self.std
+        # "Z Normalization"
+        # motion = (motion - self.mean) / self.std
 
         if m_length < self.max_motion_length:
             motion = np.concatenate([motion,
                                      np.zeros((self.max_motion_length - m_length, motion.shape[1]))
                                      ], axis=0)
-        # print(word_embeddings.shape, motion.shape)
-        # print(tokens)
 
         length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
 

@@ -41,16 +41,16 @@ def main():
     print(args_motionbert)
 
     model_backbone = load_backbone(args_motionbert)
+    model_backbone = model_backbone.to(dist_util.dev())
+
+    for param in model_backbone.parameters():
+        param.requires_grad = False
 
     model_params = 0
     for parameter in model_backbone.parameters():
         model_params = model_params + parameter.numel()
     print('INFO: MotionBERT Trainable parameter count:', model_params)
-
-    # if torch.cuda.is_available():
-    #     model_backbone = nn.DataParallel(model_backbone)    ## 就是因为这一步会在每一个模块前面加上module
-    #     model_backbone = model_backbone.cuda()
-
+    
     print('Loading checkpoint', args.evaluate_motionbert)
     checkpoint = torch.load(args.evaluate_motionbert, map_location=lambda storage, loc: storage)   ## 这里目前默认是使用162M的模型
     model_backbone.load_state_dict(remove_module_prefix(checkpoint['model_pos']), strict=True)
@@ -66,13 +66,13 @@ def main():
                               device=dist_util.dev(),)
 
     print("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(args, data)
+    model, diffusion = create_model_and_diffusion(args, data)   ## 和DIP没有什么关系，就是经典的MDM架构
     model.to(dist_util.dev())
     model.rot2xyz.smpl_model.eval()
 
     print('Total params: %.2fM' % (sum(p.numel() for p in model.parameters_wo_clip()) / 1000000.0))
     print("Training...")
-    TrainLoop(args, train_platform, model, diffusion, data).run_loop()
+    TrainLoop(args, train_platform, model, diffusion, data, model_backbone).run_loop()
     train_platform.close()
 
 if __name__ == "__main__":

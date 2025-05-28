@@ -13,6 +13,8 @@ import blobfile as bf
 import torch
 from torch.optim import AdamW
 
+import sys
+sys.path.append("/home/mengqing/usr/motion-diffusion-model")
 from diffusion import logger
 from utils import dist_util
 from diffusion.fp16_util import MixedPrecisionTrainer
@@ -27,15 +29,29 @@ from utils.model_util import load_model_wo_clip
 from data_loaders.humanml.scripts.motion_process import get_target_location, sample_goal, get_allowed_joint_options
 from utils.sampler_util import ClassifierFreeSampleModel
 
+from data_loaders.humanml.scripts.motion_process import recover_from_ric
+from MotionBERT.Aric_get_motion_embedding import convert_kps
+from utils.motion_util import pad_joints_to_24
+
+from MotionBERT.lib.utils.utils_data import crop_scale
+
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
 # 20-21 within the first ~1K steps of training.
 INITIAL_LOG_LOSS_SCALE = 20.0
 
+# H36M索引映射表
+SMPL_TO_H36M_MAP = [
+    0, 2, 5, 8, 1, 4, 7,
+    3, 9, 12, 15,
+    16, 18, 20,
+    17, 19, 21
+]
+
 
 class TrainLoop:
-    def __init__(self, args, train_platform, model, diffusion, data):
+    def __init__(self, args, train_platform, model, diffusion, data, model_backbone):
         self.args = args
         self.dataset = args.dataset
         self.train_platform = train_platform
@@ -77,6 +93,8 @@ class TrainLoop:
 
         self.save_dir = args.save_dir
         self.overwrite = args.overwrite
+
+        self.motionbert_backbone = model_backbone
 
         if self.args.use_ema:
             self.opt = AdamW(
@@ -212,8 +230,8 @@ class TrainLoop:
                 if not (not self.lr_anneal_steps or self.total_step() < self.lr_anneal_steps):
                     break
                 
-                self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency
-                motion = motion.to(self.device)
+                self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency,看了一下好像没有什么用
+                motion = motion.to(self.device) ## 这个地方的motion确认过了都是没有问题的
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
 
                 self.run_step(motion, cond)
@@ -315,15 +333,32 @@ class TrainLoop:
             # Eliminates the microbatch feature
             assert i == 0
             assert self.microbatch == self.batch_size
-            micro = batch
+            micro = batch   ## (64,263,1,196)
             micro_cond = cond
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 
+            ## use MotionBERT to process the motion
+            micro=micro.squeeze(2).permute(0,2,1)   ## [bs, 263, 1, seq_len] -> [bs, seq_len, 263]
+            joints=recover_from_ric(micro, joints_num=22)
+            # joints_mb, mask = convert_kps(pad_joints_to_24(joints), src='smpl', dst='h36m') ## 感觉这个地方不太对，得可视化一下
+            
+            # 提取对应的 H36M joints
+            h36m_joints = joints[:,:,SMPL_TO_H36M_MAP]  ## [bs, seqlen, 22, 3]-> [bs, seqlen, 17, 3]
+            ## 直接进行正交投影
+            motion_2d=torch.zeros(h36m_joints.shape, dtype=torch.float32, device=dist_util.dev())
+            motion_2d[..., :2]=(-h36m_joints[..., :2])  # 只保留x,y坐标
+            motion_2d[..., 2] = 1
+            motion_2d_scaled=torch.tensor(crop_scale(motion_2d.cpu().numpy(), scale_range=[1,1]), device=dist_util.dev(), dtype=torch.float32)  ## [bs, seqlen, 17, 3] -> [bs, seqlen, 17, 3]
+            motion_2d_scaled[...,:2]=motion_2d_scaled[...,:2] * 2.3  # 这个2.3是个经验值，就是为了把人拉大一点
+            with torch.inference_mode():    ## 测试下来好像加或者不加对显存的占用都是一样的
+                rep = self.motionbert_backbone.get_representation(motion_2d_scaled)
+
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
                 self.ddp_model,
-                micro,  # [bs, ch, image_size, image_size]
+                # micro,  # [bs, ch, image_size, image_size]
+                rep,  # [bs, seq_len, 17, 512]
                 t,  # [bs](int) sampled timesteps
                 model_kwargs=micro_cond,
                 dataset=self.data.dataset
@@ -473,3 +508,13 @@ def log_loss_dict(diffusion, ts, losses):
         for sub_t, sub_loss in zip(ts.cpu().numpy(), values.detach().cpu().numpy()):
             quartile = int(4 * sub_t / diffusion.num_timesteps)
             logger.logkv_mean(f"{key}_q{quartile}", sub_loss)
+
+
+if __name__=="__main__":
+    data_263=torch.tensor(np.load("/home/mengqing/usr/z_old/test_263.npy"))
+    print("shape of data 263:", data_263.shape)
+    data_263=data_263.squeeze(2).permute(0,2,1) 
+    # input: (seq_len, 263)/(bs, seq_len, 263)--->output: (seq_len, 22, 3)/(bs, seq_len, 22, 3)
+    joints_data=recover_from_ric(torch.tensor(data_263).float(), joints_num=22)
+    np.save("/home/mengqing/usr/z_old/test_22x3.npy", np.array(joints_data))
+    print(joints_data.shape)
