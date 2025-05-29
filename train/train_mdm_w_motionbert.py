@@ -26,8 +26,7 @@ def main():
     if args.save_dir is None:
         raise FileNotFoundError('save_dir was not specified.')
     elif os.path.exists(args.save_dir) and not args.overwrite:
-        # raise FileExistsError('save_dir [{}] already exists.'.format(args.save_dir))
-        pass
+        raise FileExistsError('save_dir [{}] already exists.'.format(args.save_dir))
     elif not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir)
     args_path = os.path.join(args.save_dir, 'args.json')
@@ -50,7 +49,6 @@ def main():
     for parameter in model_backbone.parameters():
         model_params = model_params + parameter.numel()
     print('INFO: MotionBERT Trainable parameter count:', model_params)
-    
     print('Loading checkpoint', args.evaluate_motionbert)
     checkpoint = torch.load(args.evaluate_motionbert, map_location=lambda storage, loc: storage)   ## 这里目前默认是使用162M的模型
     model_backbone.load_state_dict(remove_module_prefix(checkpoint['model_pos']), strict=True)
