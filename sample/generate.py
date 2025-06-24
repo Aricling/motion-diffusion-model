@@ -76,7 +76,7 @@ def main(args=None):
     args.batch_size = args.num_samples  # Sampling a single batch from the testset, with exactly args.num_samples
 
     print('Loading dataset...')
-    data = load_dataset(args, max_frames, n_frames)
+    data = load_dataset(args, max_frames, n_frames) ## 这里加载的是纯text的Dataset
     total_num_samples = args.num_samples * args.num_repetitions
 
     print("Creating model and diffusion...")
@@ -122,6 +122,7 @@ def main(args=None):
     all_motions = []
     all_lengths = []
     all_text = []
+    all_db_keys = []
 
     # add CFG scale to batch
     if args.guidance_param != 1:
@@ -160,21 +161,24 @@ def main(args=None):
         # Recover XYZ *positions* from HumanML3D vector representation
         if model.data_rep == 'hml_vec':
             n_joints = 22 if sample.shape[1] == 263 else 21
-            sample = data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()
-            sample = recover_from_ric(sample, n_joints)
-            sample = sample.view(-1, *sample.shape[2:]).permute(0, 2, 3, 1) ## [6,1,120,22,3]->[6,22,3,120]
-
-        rot2xyz_pose_rep = 'xyz' if model.data_rep in ['xyz', 'hml_vec'] else model.data_rep
-        rot2xyz_mask = None if rot2xyz_pose_rep == 'xyz' else model_kwargs['y']['mask'].reshape(args.batch_size, n_frames).bool()
-        sample = model.rot2xyz(x=sample, mask=rot2xyz_mask, pose_rep=rot2xyz_pose_rep, glob=True, translation=True,
-                               jointstype='smpl', vertstrans=True, betas=None, beta=0, glob_rot=None,
-                               get_rotations_back=False)
+            # sample = data.dataset.t2m_dataset.inv_transform(sample.cpu().permute(0, 2, 3, 1)).float()
+            # sample = recover_from_ric(sample, n_joints)
+            # sample = sample.view(-1, *sample.shape[2:]).permute(0, 2, 3, 1) ## [6,1,120,22,3]->[6,22,3,120]
+            sample=sample.squeeze(2).permute(0,2,1)
+            sample=sample.reshape(*(sample.shape)[:2],17,512)
+        # rot2xyz_pose_rep = 'xyz' if model.data_rep in ['xyz', 'hml_vec'] else model.data_rep
+        # rot2xyz_mask = None if rot2xyz_pose_rep == 'xyz' else model_kwargs['y']['mask'].reshape(args.batch_size, n_frames).bool()
+        # sample = model.rot2xyz(x=sample, mask=rot2xyz_mask, pose_rep=rot2xyz_pose_rep, glob=True, translation=True,
+        #                        jointstype='smpl', vertstrans=True, betas=None, beta=0, glob_rot=None,
+        #                        get_rotations_back=False)
 
         if args.unconstrained:
             all_text += ['unconstrained'] * args.num_samples
         else:
             text_key = 'text' if 'text' in model_kwargs['y'] else 'action_text'
             all_text += model_kwargs['y'][text_key]
+            if 'db_key' in model_kwargs['y']:
+                all_db_keys += model_kwargs['y']['db_key']
 
         all_motions.append(sample.cpu().numpy())
         _len = model_kwargs['y']['lengths'].cpu().numpy()
@@ -197,8 +201,9 @@ def main(args=None):
     npy_path = os.path.join(out_path, 'results.npy')
     print(f"saving results file to [{npy_path}]")
     np.save(npy_path,
-            {'motion': all_motions, 'text': all_text, 'lengths': all_lengths,
-             'num_samples': args.num_samples, 'num_repetitions': args.num_repetitions})
+            {'motion_emb': all_motions, 'text': all_text, 'lengths': all_lengths,
+             'num_samples': args.num_samples, 'num_repetitions': args.num_repetitions,
+             "seq_name": all_db_keys if len(all_db_keys) > 0 else None,})
     if args.dynamic_text_path != '':
         text_file_content = '\n'.join(['#'.join(s) for s in all_text])
     else:
@@ -208,6 +213,7 @@ def main(args=None):
     with open(npy_path.replace('.npy', '_len.txt'), 'w') as fw:
         fw.write('\n'.join([str(l) for l in all_lengths]))
 
+    '''
     print(f"saving visualizations to [{out_path}]...")
     skeleton = paramUtil.kit_kinematic_chain if args.dataset == 'kit' else paramUtil.t2m_kinematic_chain
 
@@ -250,6 +256,8 @@ def main(args=None):
     print(f'[Done] Results are at [{abs_path}]')
 
     return out_path
+    '''
+    return
 
 
 def save_multiple_samples(out_path, file_templates,  animations, fps, max_frames, no_dir=False):

@@ -1,13 +1,13 @@
 python -m train.train_mdm_w_motionbert \
-    --save_dir save/my_humanml_trans_dec_bert_512 \
+    --save_dir save/my_humanml_trans_dec_clip_512_add_normalization_aplly_m_length_to_motion_emb \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \
-    --text_encoder_type bert \
+    --text_encoder_type clip \
     --mask_frames \
     --use_ema \
-    --device 4 \
+    --device 7 \
     --overwrite \
-    --train_platform_type WandBPlatform \
     --motionbert_config /home/mengqing/usr/motion-diffusion-model/MotionBERT/configs/pose3d/MB_ft_h36m_global_lite.yaml \
-    --evaluate_motionbert /home/mengqing/usr/motion-diffusion-model/MotionBERT/checkpoint/pose3d/FT_MB_lite_MB_ft_h36m_global_lite/best_epoch.bin
+    --evaluate_motionbert /home/mengqing/usr/motion-diffusion-model/MotionBERT/checkpoint/pose3d/FT_MB_lite_MB_ft_h36m_global_lite/best_epoch.bin \
+    --train_platform_type WandBPlatform

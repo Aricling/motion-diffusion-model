@@ -42,17 +42,9 @@ from typing import Tuple, Dict
 # 20-21 within the first ~1K steps of training.
 INITIAL_LOG_LOSS_SCALE = 20.0
 
-# H36M索引映射表
-SMPL_TO_H36M_MAP = [
-    0, 2, 5, 8, 1, 4, 7,
-    3, 9, 12, 15,
-    16, 18, 20,
-    17, 19, 21
-]
-
 
 class TrainLoop:
-    def __init__(self, args, train_platform, model, diffusion, data, model_backbone):
+    def __init__(self, args, train_platform, model, diffusion, data):
         self.args = args
         self.dataset = args.dataset
         self.train_platform = train_platform
@@ -94,8 +86,6 @@ class TrainLoop:
 
         self.save_dir = args.save_dir
         self.overwrite = args.overwrite
-
-        self.motionbert_backbone = model_backbone
 
         if self.args.use_ema:
             self.opt = AdamW(
@@ -339,18 +329,11 @@ class TrainLoop:
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
 
-            ## use MotionBERT to process the motion
-            representation, processed_motion = self.process_motion_to_representation(
-                micro=micro,
-                smpl_to_h36m_map=SMPL_TO_H36M_MAP,
-                cond=micro_cond
-            )
-
             compute_losses = functools.partial(
                 self.diffusion.training_losses,
                 self.ddp_model,
                 # micro,  # [bs, ch, image_size, image_size]
-                representation,  # [bs, seq_len, 17, 512]
+                micro,  # [bs, 17x512, seq_len]
                 t,  # [bs](int) sampled timesteps
                 model_kwargs=micro_cond,
                 dataset=self.data.dataset
@@ -469,62 +452,6 @@ class TrainLoop:
                 }
 
             torch.save(opt_state, f)
-
-    def process_motion_to_representation(
-        self,
-        micro: torch.Tensor,  # 输入张量 [bs, 263, 1, seq_len]
-        joints_num: int = 22,  # 原始关节数
-        smpl_to_h36m_map: list = None,  # SMPL到H36M的关节映射
-        cond: Optional[Dict[str, Tuple[torch.Tensor, str]]] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        处理运动数据并提取MotionBERT表示
-        
-        Args:
-            micro: 输入张量 [bs, 263, 1, seq_len]
-            joints_num: 原始关节数 (默认22)
-            smpl_to_h36m_map: SMPL到H36M的关节映射列表
-            
-        Returns:
-            Tuple[representation, processed_motion_2d]:
-                - representation: MotionBERT提取的表示 [bs, 17, 512, seq_len]
-                - processed_motion_2d: 处理后的2D运动数据 [bs, seq_len, 17, 3]
-        """
-        # 1. 调整micro张量形状
-        micro = micro.squeeze(2).permute(0, 2, 1)  # [bs, 263, 1, seq_len] -> [bs, seq_len, 263]
-        lengths=cond['y']['lengths']
-        
-        # 2. 恢复关节数据
-        joints = recover_from_ric(micro, joints_num=joints_num)
-        
-        # 3. 提取H36M关节 (假设SMPL_TO_H36M_MAP已定义)
-        if smpl_to_h36m_map is None:
-            raise ValueError("SMPL_TO_H36M_MAP must be provided")
-        h36m_joints = joints[:, :, smpl_to_h36m_map]  # [bs, seq_len, 22, 3] -> [bs, seq_len, 17, 3]
-        
-        # 4. 正交投影处理
-        motion_2d = torch.zeros_like(h36m_joints, dtype=torch.float32, device=self.device)
-        motion_2d[..., :2] = -h36m_joints[..., :2]  # 只保留x,y坐标并取反
-        motion_2d[..., 2] = 1
-        
-        # 假设crop_scale是已定义的函数
-        motion_2d_scaled = torch.tensor(
-            crop_scale(motion_2d.cpu().numpy(), scale_range=[1, 1]),
-            device=self.device,
-            dtype=torch.float32
-        )  # [bs, seq_len, 17, 3]
-        
-        # 调整尺度，其中2.3为经验值
-        motion_2d_scaled[..., :2] = motion_2d_scaled[..., :2] * 2.3
-        
-        # 5. 通过MotionBERT提取表示
-        with torch.inference_mode():
-            rep = self.motionbert_backbone.get_representation(motion_2d_scaled)
-        
-        # 6. 调整表示形状
-        rep_inp = rep.permute(0, 2, 3, 1)  # [bs, seq_len, 17, 512] -> [bs, 17, 512, seq_len]
-        
-        return rep_inp, motion_2d_scaled
 
 
 def parse_resume_step_from_filename(filename):
