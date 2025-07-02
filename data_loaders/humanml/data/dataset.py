@@ -441,8 +441,6 @@ class Text2MotionDatasetV2(data.Dataset):
             m_length = self.opt.fixed_len
         
         idx = random.randint(0, len(motion) - m_length)
-        if self.opt.disable_offset_aug:
-            idx = random.randint(0, self.opt.unit_length)
         motion = motion[idx:idx+m_length]
 
         length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
@@ -453,7 +451,6 @@ class Text2MotionDatasetV2(data.Dataset):
             length=length
         )
         ## 加上了normalization
-        motion_emb=data["motion_emb"][idx:idx+m_length]
         motion_emb_normed=self.norm_motion_emb(motion_emb, self.motion_emb_mean, self.motion_emb_std)
 
         if m_length < self.max_motion_length:
