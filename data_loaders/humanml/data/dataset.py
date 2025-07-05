@@ -219,7 +219,7 @@ class Text2MotionDataset(data.Dataset):
 
 '''For use of training text motion matching model, and evaluations'''
 class Text2MotionDatasetV2(data.Dataset):
-    def __init__(self, opt, mean, std, split_file, w_vectorizer, MB_backbone=None):
+    def __init__(self, opt, mean, std, split_file, w_vectorizer):
         self.opt = opt
         self.w_vectorizer = w_vectorizer
         self.max_length = 20
@@ -228,10 +228,6 @@ class Text2MotionDatasetV2(data.Dataset):
         self.pointer = 0
         self.max_motion_length = opt.max_motion_length
         min_motion_len = 40 if self.opt.dataset_name =='t2m' else 24
-
-        self.MB_backbone=MB_backbone
-        self.motion_emb_mean = np.load(opt.meta_dir + '/motion_emb_mean.npy')
-        self.motion_emb_std = np.load(opt.meta_dir + '/motion_emb_std.npy')
 
         data_dict = {}
         id_list = []
@@ -327,64 +323,6 @@ class Text2MotionDatasetV2(data.Dataset):
 
     def inv_transform(self, data):
         return data * self.std + self.mean
-    
-    def process_motion_to_representation(
-        self,
-        micro: torch.Tensor,  # 输入张量 [bs, 263, 1, seq_len]
-        joints_num: int = 22,  # 原始关节数
-        smpl_to_h36m_map: list = None,  # SMPL到H36M的关节映射
-        length: int=None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        处理运动数据并提取MotionBERT表示
-        
-        Args:
-            micro: 输入张量 [bs, 263, 1, seq_len]
-            joints_num: 原始关节数 (默认22)
-            smpl_to_h36m_map: SMPL到H36M的关节映射列表
-            
-        Returns:
-            Tuple[representation, processed_motion_2d]:
-                - representation: MotionBERT提取的表示 [bs, 17, 512, seq_len]
-                - processed_motion_2d: 处理后的2D运动数据 [bs, seq_len, 17, 3]
-        """
-        with torch.no_grad():
-            # 1. 调整micro张量形状
-            micro = micro.squeeze(2).permute(0, 2, 1).to(dist_util.dev())  # [bs, 263, 1, seq_len] -> [bs, seq_len, 263]
-            
-            # 2. 恢复关节数据
-            joints = recover_from_ric(micro, joints_num=joints_num)
-            
-            # 3. 提取H36M关节 (假设SMPL_TO_H36M_MAP已定义)
-            if smpl_to_h36m_map is None:
-                raise ValueError("SMPL_TO_H36M_MAP must be provided")
-            h36m_joints = joints[:, :, smpl_to_h36m_map]  # [bs, seq_len, 22, 3] -> [bs, seq_len, 17, 3]
-
-
-            # 4. 正交投影处理
-            motion_2d = torch.zeros_like(h36m_joints, dtype=torch.float32, device=micro.device)
-            motion_2d[..., :2] = -h36m_joints[..., :2]  # 只保留x,y坐标并取反
-            motion_2d[..., 2] = 1
-            
-            # 假设crop_scale是已定义的函数
-            motion_2d_scaled = torch.tensor(
-                crop_scale(motion_2d.cpu().numpy(), scale_range=[1, 1]),
-                device=micro.device,
-                dtype=torch.float32
-            )  # [bs, seq_len, 17, 3]
-            
-            # 调整尺度，其中2.3为经验值
-            motion_2d_scaled[..., :2] = motion_2d_scaled[..., :2]
-            
-            # 5. 通过MotionBERT提取表示
-            with torch.inference_mode():
-                rep = self.MB_backbone.get_representation(motion_2d_scaled)
-            
-            # 6. 调整表示形状
-            # rep_inp = rep.permute(0, 2, 3, 1)  # [bs, seq_len, 17, 512] -> [bs, 17, 512, seq_len]
-            rep_inp=rep.squeeze(0).reshape(length,-1)   # [bs, seq_len, 17, 512] -> [seq_len, 17x512]
-            
-            return rep_inp.detach().cpu().numpy(), motion_2d_scaled.detach().cpu().numpy()
 
     def norm_motion_emb(self, motion_emb, mean, std):
         return (motion_emb - mean) / std
@@ -444,21 +382,26 @@ class Text2MotionDatasetV2(data.Dataset):
         motion = motion[idx:idx+m_length]
 
         length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
-        ## use MotionBERT to process the motion
-        motion_emb, processed_motion = self.process_motion_to_representation(
-            micro=torch.from_numpy(motion).permute(1,0).unsqueeze(0).unsqueeze(2),
-            smpl_to_h36m_map=SMPL_TO_H36M_MAP,
-            length=length
-        )
-        ## 加上了normalization
-        motion_emb_normed=self.norm_motion_emb(motion_emb, self.motion_emb_mean, self.motion_emb_std)
+        # ## use MotionBERT to process the motion
+        # motion_emb, processed_motion = self.process_motion_to_representation(
+        #     micro=torch.from_numpy(motion).permute(1,0).unsqueeze(0).unsqueeze(2),
+        #     smpl_to_h36m_map=SMPL_TO_H36M_MAP,
+        #     length=length
+        # )
+        # ## 加上了normalization
+        # motion_emb_normed=self.norm_motion_emb(motion_emb, self.motion_emb_mean, self.motion_emb_std)
 
+        # if m_length < self.max_motion_length:
+        #     motion_emb_normed = np.concatenate([motion_emb_normed,
+        #                              np.zeros((self.max_motion_length - m_length, motion_emb.shape[1]))
+        #                              ], axis=0)
+        # motion_emb_normed_pooled=motion_emb_normed[::7, ...]
         if m_length < self.max_motion_length:
-            motion_emb_normed = np.concatenate([motion_emb_normed,
-                                     np.zeros((self.max_motion_length - m_length, motion_emb.shape[1]))
-                                     ], axis=0)
+            motion=np.concatenate([
+                motion, np.zeros((self.max_motion_length-m_length, motion.shape[1]))
+            ], axis=0)
 
-        return word_embeddings, pos_one_hots, caption, sent_len, motion_emb_normed, length, '_'.join(tokens)
+        return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens)
 
 
 '''For use of training baseline'''
@@ -886,7 +829,7 @@ class HumanML3D(data.Dataset):
             self.t2m_dataset = TextOnlyDataset(self.opt, self.mean, self.std, self.split_file)
         else:
             self.w_vectorizer = WordVectorizer(pjoin(opt.cache_dir, 'glove'), 'our_vab')
-            self.t2m_dataset = Text2MotionDatasetV2(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer, self.MB_backbone)
+            self.t2m_dataset = Text2MotionDatasetV2(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer)
             self.num_actions = 1 # dummy placeholder
 
         self.mean_gpu = torch.tensor(self.mean).to(device)[None, :, None, None]

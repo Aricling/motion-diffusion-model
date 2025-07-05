@@ -165,6 +165,9 @@ def main(args=None):
             # sample = recover_from_ric(sample, n_joints)
             # sample = sample.view(-1, *sample.shape[2:]).permute(0, 2, 3, 1) ## [6,1,120,22,3]->[6,22,3,120]
             sample=sample.squeeze(2).permute(0,2,1)
+            motion_emb_mean=np.load("/home/mengqing/usr/motion-diffusion-model/dataset/motion_emb_mean.npy")
+            motion_emb_std=np.load("/home/mengqing/usr/motion-diffusion-model/dataset/motion_emb_std.npy")
+            sample=sample * torch.tensor(motion_emb_std, device=sample.device) + torch.tensor(motion_emb_mean, device=sample.device)
             sample=sample.reshape(*(sample.shape)[:2],17,512)
         # rot2xyz_pose_rep = 'xyz' if model.data_rep in ['xyz', 'hml_vec'] else model.data_rep
         # rot2xyz_mask = None if rot2xyz_pose_rep == 'xyz' else model_kwargs['y']['mask'].reshape(args.batch_size, n_frames).bool()

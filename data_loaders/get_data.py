@@ -45,15 +45,15 @@ def get_dataset(name, num_frames, split='train', hml_mode='train', abs_path='.',
 
 
 def get_dataset_loader(name, batch_size, num_frames, split='train', hml_mode='train', fixed_len=0, pred_len=0, 
-                       device=None, autoregressive=False, MB_backbone=None):
+                       device=None, autoregressive=False):
     dataset = get_dataset(name, num_frames, split=split, hml_mode=hml_mode, fixed_len=fixed_len, 
-                device=device, autoregressive=autoregressive, MB_backbone=MB_backbone)
+                device=device, autoregressive=autoregressive)
     
     collate = get_collate_fn(name, hml_mode, pred_len, batch_size)
 
     loader = DataLoader(
         dataset, batch_size=batch_size, shuffle=True,
-        num_workers=0, drop_last=True, collate_fn=collate
+        num_workers=8, drop_last=True, collate_fn=collate
     )
 
     return loader

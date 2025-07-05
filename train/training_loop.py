@@ -44,7 +44,7 @@ INITIAL_LOG_LOSS_SCALE = 20.0
 
 
 class TrainLoop:
-    def __init__(self, args, train_platform, model, diffusion, data):
+    def __init__(self, args, train_platform, model, diffusion, data, MB_backbone):
         self.args = args
         self.dataset = args.dataset
         self.train_platform = train_platform
@@ -136,6 +136,10 @@ class TrainLoop:
         self.use_ddp = False
         self.ddp_model = self.model
 
+        self.MB_backbone=MB_backbone
+        self.motion_emb_mean = np.load("/home/mengqing/usr/motion-diffusion-model/dataset/motion_emb_mean.npy")
+        self.motion_emb_std = np.load("/home/mengqing/usr/motion-diffusion-model/dataset/motion_emb_std.npy")
+
     def _load_and_sync_parameters(self):
         resume_checkpoint = self.find_resume_checkpoint() or self.resume_checkpoint
 
@@ -213,19 +217,89 @@ class TrainLoop:
                                                       cond['lengths'], 
                                                       self.data.dataset.t2m_dataset.opt.joints_num, self.model.all_goal_joint_names, cond['target_joint_names'], cond['is_heading']).detach()
 
+    def process_motion_to_representation(
+        self,
+        micro: torch.Tensor,  # 输入张量 [bs, 263, 1, seq_len]
+        joints_num: int = 22,  # 原始关节数
+        smpl_to_h36m_map: list = [
+                    0, 2, 5, 8, 1, 4, 7,
+                    3, 9, 12, 15,
+                    16, 18, 20,
+                    17, 19, 21
+                ],  # SMPL到H36M的关节映射
+        length_list: int=None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        处理运动数据并提取MotionBERT表示
+        
+        Args:
+            micro: 输入张量 [bs, 263, 1, seq_len]
+            joints_num: 原始关节数 (默认22)
+            smpl_to_h36m_map: SMPL到H36M的关节映射列表
+            
+        Returns:
+            Tuple[representation, processed_motion_2d]:
+                - representation: MotionBERT提取的表示 [bs, 17, 512, seq_len]
+                - processed_motion_2d: 处理后的2D运动数据 [bs, seq_len, 17, 3]
+        """
+        with torch.no_grad():
+            # 1. 调整micro张量形状
+            micro = micro.squeeze(2).permute(0, 2, 1).to(dist_util.dev())  # [bs, 263, 1, seq_len] -> [bs, seq_len, 263]
+            
+            # 2. 恢复关节数据
+            joints = recover_from_ric(micro, joints_num=joints_num)
+            
+            # 3. 提取H36M关节 (假设SMPL_TO_H36M_MAP已定义)
+            if smpl_to_h36m_map is None:
+                raise ValueError("SMPL_TO_H36M_MAP must be provided")
+            h36m_joints = joints[:, :, smpl_to_h36m_map]  # [bs, seq_len, 22, 3] -> [bs, seq_len, 17, 3]
+
+
+            # 4. 正交投影处理
+            motion_2d = torch.zeros_like(h36m_joints, dtype=torch.float32, device=micro.device)
+            motion_2d[..., :2] = -h36m_joints[..., :2]  # 只保留x,y坐标并取反
+            motion_2d[..., 2] = 1
+            
+            # 假设crop_scale是已定义的函数
+            motion_2d_scaled = torch.tensor(
+                crop_scale(motion_2d.cpu().numpy(), scale_range=[1, 1]),
+                device=micro.device,
+                dtype=torch.float32
+            )  # [bs, seq_len, 17, 3]
+            
+            # 5. 通过MotionBERT提取表示
+            motion_emb_list=[]
+            with torch.inference_mode():
+                for motion_2d_scaled_i, length in zip(motion_2d_scaled, length_list):
+                    motion_2d_scaled_i = motion_2d_scaled_i.unsqueeze(0) 
+                    motion_emb = self.MB_backbone.get_representation(motion_2d_scaled_i[:, :length])
+                    padded_motion_emb = torch.zeros(1, 196, 17, 512, device=motion_emb.device)
+                    padded_motion_emb[:, :motion_emb.shape[1], :, :] = motion_emb
+                    motion_emb_list.append(padded_motion_emb)
+            rep = torch.cat(motion_emb_list)  # [bs, seq_len, 17, 512]
+            
+            # 6. 调整表示形状
+            rep_inp=rep.reshape(*rep.shape[:2],-1)   # [bs, 196, 17, 512] -> [bs, 196, 17x512]
+            
+            return rep_inp.detach(), motion_2d_scaled.detach()
+
     def run_loop(self):
         print('train steps:', self.num_steps)
         for epoch in range(self.num_epochs):
             print(f'Starting epoch {epoch}')
-            for motion, cond in tqdm(self.data):
+            for motion, cond in tqdm(self.data):    ## [64, 263, 1, 196]
                 if not (not self.lr_anneal_steps or self.total_step() < self.lr_anneal_steps):
                     break
                 
-                self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency,看了一下好像没有什么用
-                motion = motion.to(self.device) ## 这个地方的motion确认过了都是没有问题的
+                MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'])
+                MB_emb_normed= (MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / torch.tensor(self.motion_emb_std, device=MB_emb.device)
+                MB_emb_normed_pooled=MB_emb_normed[:, ::7, :]
+                
+                # self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency,看了一下好像没有什么用
+                # motion = motion.to(self.device) ## 这个地方的motion确认过了都是没有问题的
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
 
-                self.run_step(motion, cond)
+                self.run_step(MB_emb_normed_pooled.permute(0,2,1).unsqueeze(2), cond)
                 if self.total_step() % self.log_interval == 0:  ## 1000
                     for k,v in logger.get_current().dumpkvs().items():
                         if k == 'loss':

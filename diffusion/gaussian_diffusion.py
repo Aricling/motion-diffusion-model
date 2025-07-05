@@ -1237,7 +1237,7 @@ class GaussianDiffusion:
 
         # enc = model.model._modules['module']
         enc = model.model
-        mask = model_kwargs['y']['mask']    ## 这个其实就和motion的长度是有关系的
+        mask = model_kwargs['y']['mask'][...,::7]    ## 这个其实就和motion的长度是有关系的
         get_xyz = lambda sample: enc.rot2xyz(sample, mask=None, pose_rep=enc.pose_rep, translation=enc.translation,
                                              glob=enc.glob,
                                              # jointstype='vertices',  # 3.4 iter/sec # USED ALSO IN MotionCLIP

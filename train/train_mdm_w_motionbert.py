@@ -61,7 +61,6 @@ def main():
                               num_frames=args.num_frames, 
                               fixed_len=args.pred_len + args.context_len, 
                               pred_len=args.pred_len,
-                              MB_backbone=model_backbone,
                               device=dist_util.dev(),)
 
     print("creating model and diffusion...")
@@ -71,7 +70,7 @@ def main():
 
     print('Total params: %.2fM' % (sum(p.numel() for p in model.parameters_wo_clip()) / 1000000.0))
     print("Training...")
-    TrainLoop(args, train_platform, model, diffusion, data).run_loop()
+    TrainLoop(args, train_platform, model, diffusion, data, model_backbone).run_loop()
     train_platform.close()
 
 if __name__ == "__main__":
