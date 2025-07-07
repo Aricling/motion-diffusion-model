@@ -284,6 +284,7 @@ class TrainLoop:
             return rep_inp.detach(), None
 
     def run_loop(self):
+        scaler = GradScaler()
         print('train steps:', self.num_steps)
         for epoch in range(self.num_epochs):
             print(f'Starting epoch {epoch}')
@@ -300,7 +301,7 @@ class TrainLoop:
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
 
                 with autocast():
-                    self.run_step(MB_emb_normed_pooled.permute(0,2,1).unsqueeze(2), cond)
+                    self.run_step(MB_emb_normed_pooled.permute(0,2,1).unsqueeze(2), cond, scaler)
                 if self.total_step() % self.log_interval == 0:  ## 1000
                     for k,v in logger.get_current().dumpkvs().items():
                         if k == 'loss':
@@ -373,9 +374,10 @@ class TrainLoop:
         print(f'Evaluation time: {round(end_eval-start_eval)/60}min')
 
 
-    def run_step(self, batch, cond):
-        self.forward_backward(batch, cond)
-        self.mp_trainer.optimize(self.opt)
+    def run_step(self, batch, cond, scaler):
+        self.forward_backward(batch, cond, scaler)
+        self.mp_trainer.optimize(self.opt, scaler)
+        scaler.update()
         self.update_average_model()
         self._anneal_lr()
         self.log_step()
@@ -393,7 +395,7 @@ class TrainLoop:
                 avg_param.data.mul_(self.args.avg_model_beta).add_(
                     param.data, alpha=1 - self.args.avg_model_beta)
 
-    def forward_backward(self, batch, cond):
+    def forward_backward(self, batch, cond, scaler):
         self.mp_trainer.zero_grad()
         for i in range(0, batch.shape[0], self.microbatch):
             # Eliminates the microbatch feature
@@ -429,7 +431,7 @@ class TrainLoop:
             log_loss_dict(
                 self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
-            self.mp_trainer.backward(loss)
+            self.mp_trainer.backward(loss, scaler)
 
     def _anneal_lr(self):
         if not self.lr_anneal_steps:

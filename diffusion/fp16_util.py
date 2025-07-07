@@ -180,11 +180,11 @@ class MixedPrecisionTrainer:
         else:
             scaler.scale(loss).backward()
 
-    def optimize(self, opt: th.optim.Optimizer):
+    def optimize(self, opt: th.optim.Optimizer, scaler):
         if self.use_fp16:
             return self._optimize_fp16(opt)
         else:
-            return self._optimize_normal(opt)
+            return self._optimize_normal(opt, scaler)
 
     def _optimize_fp16(self, opt: th.optim.Optimizer):
         logger.logkv_mean("lg_loss_scale", self.lg_loss_scale)
