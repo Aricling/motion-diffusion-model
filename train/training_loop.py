@@ -35,6 +35,7 @@ from utils.motion_util import pad_joints_to_24
 
 from MotionBERT.lib.utils.utils_data import crop_scale
 from typing import Tuple, Dict
+from torch.cuda.amp import GradScaler, autocast
 
 
 # For ImageNet experiments, this was a good default value.
@@ -87,7 +88,7 @@ class TrainLoop:
         self.save_dir = args.save_dir
         self.overwrite = args.overwrite
 
-        if self.args.use_ema:
+        if self.args.use_ema:   ## 这里是True
             self.opt = AdamW(
                 # with amp, we don't need to use the mp_trainer's master_params
                 (self.model.parameters()
@@ -259,20 +260,19 @@ class TrainLoop:
             motion_2d = torch.zeros_like(h36m_joints, dtype=torch.float32, device=micro.device)
             motion_2d[..., :2] = -h36m_joints[..., :2]  # 只保留x,y坐标并取反
             motion_2d[..., 2] = 1
-            
-            # 假设crop_scale是已定义的函数
-            motion_2d_scaled = torch.tensor(
-                crop_scale(motion_2d.cpu().numpy(), scale_range=[1, 1]),
-                device=micro.device,
-                dtype=torch.float32
-            )  # [bs, seq_len, 17, 3]
-            
-            # 5. 通过MotionBERT提取表示
+           
             motion_emb_list=[]
-            with torch.inference_mode():
-                for motion_2d_scaled_i, length in zip(motion_2d_scaled, length_list):
-                    motion_2d_scaled_i = motion_2d_scaled_i.unsqueeze(0) 
-                    motion_emb = self.MB_backbone.get_representation(motion_2d_scaled_i[:, :length])
+            for motion_2d_i, length in zip(motion_2d, length_list):     ## motion_2d.shape=[bs, 196, 17, 3]
+                motion_2d_i_scaled = torch.tensor(
+                    crop_scale(motion_2d_i[:length].cpu().numpy(), scale_range=[1, 1]),
+                    device=micro.device,
+                    dtype=torch.float32
+                )  # [bs, seq_len, 17, 3]
+            
+                # 5. 通过MotionBERT提取表示
+                with torch.inference_mode():
+                    motion_2d_scaled_i = motion_2d_i_scaled.unsqueeze(0)    ## [seq_len, 17, 3] -> [1, seq_len, 17, 3]
+                    motion_emb = self.MB_backbone.get_representation(motion_2d_scaled_i)
                     padded_motion_emb = torch.zeros(1, 196, 17, 512, device=motion_emb.device)
                     padded_motion_emb[:, :motion_emb.shape[1], :, :] = motion_emb
                     motion_emb_list.append(padded_motion_emb)
@@ -281,7 +281,7 @@ class TrainLoop:
             # 6. 调整表示形状
             rep_inp=rep.reshape(*rep.shape[:2],-1)   # [bs, 196, 17, 512] -> [bs, 196, 17x512]
             
-            return rep_inp.detach(), motion_2d_scaled.detach()
+            return rep_inp.detach(), None
 
     def run_loop(self):
         print('train steps:', self.num_steps)
@@ -299,7 +299,8 @@ class TrainLoop:
                 # motion = motion.to(self.device) ## 这个地方的motion确认过了都是没有问题的
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
 
-                self.run_step(MB_emb_normed_pooled.permute(0,2,1).unsqueeze(2), cond)
+                with autocast():
+                    self.run_step(MB_emb_normed_pooled.permute(0,2,1).unsqueeze(2), cond)
                 if self.total_step() % self.log_interval == 0:  ## 1000
                     for k,v in logger.get_current().dumpkvs().items():
                         if k == 'loss':

@@ -12,22 +12,6 @@ from torch.utils.data._utils.collate import default_collate
 from data_loaders.humanml.utils.word_vectorizer import WordVectorizer
 from data_loaders.humanml.utils.get_opt import get_opt
 
-from typing import Tuple, Optional, Dict
-from data_loaders.humanml.scripts.motion_process import recover_from_ric
-from MotionBERT.lib.utils.utils_data import crop_scale
-
-from utils import dist_util
-
-# H36M索引映射表
-SMPL_TO_H36M_MAP = [
-    0, 2, 5, 8, 1, 4, 7,
-    3, 9, 12, 15,
-    16, 18, 20,
-    17, 19, 21
-]
-
-# import spacy
-
 def collate_fn(batch):
     batch.sort(key=lambda x: x[3], reverse=True)
     return default_collate(batch)
