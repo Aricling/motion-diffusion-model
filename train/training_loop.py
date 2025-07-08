@@ -245,10 +245,11 @@ class TrainLoop:
         """
         with torch.no_grad():
             # 1. 调整micro张量形状
-            micro = micro.squeeze(2).permute(0, 2, 1).to(dist_util.dev())  # [bs, 263, 1, seq_len] -> [bs, seq_len, 263]
+            micro = micro.squeeze(2).permute(0, 2, 1).to(dist_util.dev())  # [bs, 66, 1, seq_len] -> [bs, seq_len, 66]
+            joints=micro.reshape(*micro.shape[:2], 22, 3)
             
-            # 2. 恢复关节数据
-            joints = recover_from_ric(micro, joints_num=joints_num)
+            # # 2. 恢复关节数据
+            # joints = recover_from_ric(micro, joints_num=joints_num)
             
             # 3. 提取H36M关节 (假设SMPL_TO_H36M_MAP已定义)
             if smpl_to_h36m_map is None:
@@ -292,7 +293,7 @@ class TrainLoop:
                 if not (not self.lr_anneal_steps or self.total_step() < self.lr_anneal_steps):
                     break
                 
-                MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'])
+                MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'])   ## 可视化了应该没什么问题，3D的直接用scale_range[1,1]，不用考虑2D，因为AMASS它也是这么做的
                 MB_emb_normed= (MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / torch.tensor(self.motion_emb_std, device=MB_emb.device)
                 MB_emb_normed_pooled=MB_emb_normed[:, ::7, :]
                 

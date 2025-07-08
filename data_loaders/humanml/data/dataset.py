@@ -298,6 +298,9 @@ class Text2MotionDatasetV2(data.Dataset):
         self.data_dict = data_dict
         self.name_list = name_list
         self.reset_max_len(self.max_length)
+        view_angles=[-60, -30, 0, 30, 60]
+        self.R_list=[self.get_rotation_matrix_y(angle) for angle in view_angles]
+        self.R_weights=[0.1, 0.15, 0.5, 0.15, 0.1]
 
     def reset_max_len(self, length):
         assert length <= self.max_motion_length
@@ -314,6 +317,16 @@ class Text2MotionDatasetV2(data.Dataset):
     def denorm_motion_emb(self, motion_emb, mean, std):
         return motion_emb * std + mean
     
+    def get_rotation_matrix_y(self, theta_deg):
+        theta = np.radians(theta_deg)  # 角度转弧度
+        cos, sin = np.cos(theta), np.sin(theta)
+        R = np.array([
+            [cos,  0, sin],
+            [0,    1,  0],
+            [-sin, 0, cos]
+        ], dtype=np.float32)  # 用 float32 保持一致
+        return R  # shape [3, 3]
+
     def __len__(self):
         return len(self.data_dict) - self.pointer
 
@@ -322,6 +335,11 @@ class Text2MotionDatasetV2(data.Dataset):
         key = self.name_list[idx]
         data = self.data_dict[key]
         motion, m_length, text_list = data['motion'], data['length'], data['text']
+        ## 随机选择视角
+        R=random.choices(self.R_list, weights=self.R_weights, k=1)[0]
+        ## 应用旋转
+        motion = motion @ R.T
+
         # Randomly select a caption
         text_data = random.choice(text_list)
         caption, tokens = text_data['caption'], text_data['tokens']
@@ -364,22 +382,10 @@ class Text2MotionDatasetV2(data.Dataset):
         
         idx = random.randint(0, len(motion) - m_length)
         motion = motion[idx:idx+m_length]
+        motion = motion.reshape(motion.shape[0], -1)
 
         length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
-        # ## use MotionBERT to process the motion
-        # motion_emb, processed_motion = self.process_motion_to_representation(
-        #     micro=torch.from_numpy(motion).permute(1,0).unsqueeze(0).unsqueeze(2),
-        #     smpl_to_h36m_map=SMPL_TO_H36M_MAP,
-        #     length=length
-        # )
-        # ## 加上了normalization
-        # motion_emb_normed=self.norm_motion_emb(motion_emb, self.motion_emb_mean, self.motion_emb_std)
 
-        # if m_length < self.max_motion_length:
-        #     motion_emb_normed = np.concatenate([motion_emb_normed,
-        #                              np.zeros((self.max_motion_length - m_length, motion_emb.shape[1]))
-        #                              ], axis=0)
-        # motion_emb_normed_pooled=motion_emb_normed[::7, ...]
         if m_length < self.max_motion_length:
             motion=np.concatenate([
                 motion, np.zeros((self.max_motion_length-m_length, motion.shape[1]))
