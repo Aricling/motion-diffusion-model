@@ -140,6 +140,8 @@ def add_data_options(parser):
                        help="Dataset name (choose from list).")
     group.add_argument("--data_dir", default="", type=str,
                        help="If empty, will use defaults according to the specified dataset.")
+    group.add_argument("--pooling", default="1", type=lambda x: int(x), help="pooling的大小")
+    group.add_argument("--multiview", default=False, action='store_true',help="是否在dataset中应用多视角")
 
 
 def add_training_options(parser):
@@ -230,7 +232,7 @@ def add_generate_options(parser):
     group.add_argument("--action_name", default='', type=str,
                        help="An action name to be generated. If empty, will take text prompts from dataset.")
     group.add_argument("--target_joint_names", default='DIMP_FINAL', type=str, help="Force single joint configuration by specifing the joints (coma separated). If None - will use the random mode for all end effectors.")
-
+    group.add_argument("--pooling", default="1", type=lambda x: int(x), help="pooling的大小")
 
 def add_edit_options(parser):
     group = parser.add_argument_group('edit')

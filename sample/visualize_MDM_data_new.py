@@ -94,13 +94,13 @@ def plot_3d_motion(save_path, kinematic_tree, joints, title, figsize=(10, 10), f
     ani.save(save_path, fps=fps)
     plt.close()
 
-src_dir = './dataset/HumanML3D/new_joints/'
-tgt_ani_dir = "/home/mengqing/usr/motion-diffusion-model/save/models_to_upload/humanml_trans_dec_512_bert/gt_visualize"
+src_dir = '/home/mengqing/usr/motion-diffusion-model/dataset/HumanML3D/new_joints'
+tgt_ani_dir = "/home/mengqing/usr/motion-diffusion-model/save/clip_512_pooling_7_add_multiview/samples_clip_512_pooling_7_add_multiview_000050000_seed10"
 
 kinematic_chain = [[0, 2, 5, 8, 11], [0, 1, 4, 7, 10], [0, 3, 6, 9, 12, 15], [9, 14, 17, 19, 21], [9, 13, 16, 18, 20]]
 os.makedirs(tgt_ani_dir, exist_ok=True)
 
-npy_files_list=["001473","002647","002707","010658","013468","M004411","M005468","M007893","M013911"]
+npy_files_list=['005031', '014169', 'O_005166', 'M011684', 'M001770', 'M000285', '011993', '004473', '005787', '005031', '014169', 'M011684', 'M001770', 'M000285', '011993', '004473', '005787']
 # npy_files = os.listdir(src_dir)
 npy_files = sorted(npy_files_list)
 

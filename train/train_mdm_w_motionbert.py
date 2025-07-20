@@ -61,6 +61,7 @@ def main():
                               num_frames=args.num_frames, 
                               fixed_len=args.pred_len + args.context_len, 
                               pred_len=args.pred_len,
+                              multi_view=args.multiview,
                               device=dist_util.dev(),)
 
     print("creating model and diffusion...")

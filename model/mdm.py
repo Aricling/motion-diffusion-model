@@ -478,3 +478,21 @@ class EmbedTargetLocMulti(nn.Module):
             # print(torch.where(output_one_sample.sum(axis=1)!=0)[0].cpu().numpy())
                
         return output
+
+
+if __name__=="__main__":
+    clip_model, preprocess = clip.load("ViT-B/32", device="cpu")  # 只需要 tokenizer，不影响计算图
+
+    # 输入两个句子，一个短一个长
+    sentences = ["hello", "a photo of a cat sitting on a bench in a park with sunlight."]
+
+    # tokenize，默认 context_length = 77
+    tokens = clip.tokenize(sentences)  # shape: [2, 77]
+
+    # 打印 token ids
+    print("Token IDs:")
+    print(tokens)
+
+    # 打印第一个句子的 token 分布
+    print("\nFirst sentence decoded:")
+    print(tokens[0])

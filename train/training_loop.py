@@ -140,6 +140,7 @@ class TrainLoop:
         self.MB_backbone=MB_backbone
         self.motion_emb_mean = np.load("/home/mengqing/usr/motion-diffusion-model/dataset/motion_emb_mean.npy")
         self.motion_emb_std = np.load("/home/mengqing/usr/motion-diffusion-model/dataset/motion_emb_std.npy")
+        self.pooling_size=args.pooling
 
     def _load_and_sync_parameters(self):
         resume_checkpoint = self.find_resume_checkpoint() or self.resume_checkpoint
@@ -295,7 +296,7 @@ class TrainLoop:
                 
                 MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'])   ## 可视化了应该没什么问题，3D的直接用scale_range[1,1]，不用考虑2D，因为AMASS它也是这么做的
                 MB_emb_normed= (MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / torch.tensor(self.motion_emb_std, device=MB_emb.device)
-                MB_emb_normed_pooled=MB_emb_normed[:, ::7, :]
+                MB_emb_normed_pooled=MB_emb_normed[:, ::self.pooling_size, :]
                 
                 # self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency,看了一下好像没有什么用
                 # motion = motion.to(self.device) ## 这个地方的motion确认过了都是没有问题的
@@ -414,7 +415,8 @@ class TrainLoop:
                 micro,  # [bs, 17x512, seq_len]
                 t,  # [bs](int) sampled timesteps
                 model_kwargs=micro_cond,
-                dataset=self.data.dataset
+                dataset=self.data.dataset,
+                pooling_size=self.pooling_size
             )
 
             if last_batch or not self.use_ddp:

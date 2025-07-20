@@ -203,7 +203,7 @@ class Text2MotionDataset(data.Dataset):
 
 '''For use of training text motion matching model, and evaluations'''
 class Text2MotionDatasetV2(data.Dataset):
-    def __init__(self, opt, mean, std, split_file, w_vectorizer):
+    def __init__(self, opt, mean, std, split_file, w_vectorizer, multi_view):
         self.opt = opt
         self.w_vectorizer = w_vectorizer
         self.max_length = 20
@@ -298,9 +298,12 @@ class Text2MotionDatasetV2(data.Dataset):
         self.data_dict = data_dict
         self.name_list = name_list
         self.reset_max_len(self.max_length)
-        view_angles=[-60, -30, 0, 30, 60]
-        self.R_list=[self.get_rotation_matrix_y(angle) for angle in view_angles]
-        self.R_weights=[0.1, 0.15, 0.5, 0.15, 0.1]
+        self.multi_view = multi_view
+        print(f"activate multi_view: {self.multi_view}")
+        if multi_view:
+            view_angles=[-60, -30, 0, 30, 60]
+            self.R_list=[self.get_rotation_matrix_y(angle) for angle in view_angles]
+            self.R_weights=[0.1, 0.15, 0.5, 0.15, 0.1]
 
     def reset_max_len(self, length):
         assert length <= self.max_motion_length
@@ -335,10 +338,11 @@ class Text2MotionDatasetV2(data.Dataset):
         key = self.name_list[idx]
         data = self.data_dict[key]
         motion, m_length, text_list = data['motion'], data['length'], data['text']
-        ## 随机选择视角
-        R=random.choices(self.R_list, weights=self.R_weights, k=1)[0]
-        ## 应用旋转
-        motion = motion @ R.T
+        if self.multi_view:
+            ## 随机选择视角
+            R=random.choices(self.R_list, weights=self.R_weights, k=1)[0]
+            ## 应用旋转
+            motion = motion @ R.T
 
         # Randomly select a caption
         text_data = random.choice(text_list)
@@ -774,7 +778,7 @@ class HumanML3D(data.Dataset):
         self.dataset_name = 't2m'
         self.dataname = 't2m'
 
-        self.MB_backbone=kwargs.get("MB_backbone", None)
+        self.multi_view=kwargs.get("multi_view", False)
 
         # Configurations of T2M dataset and KIT dataset is almost the same
         abs_base_path = kwargs.get('abs_path', '.')
@@ -819,7 +823,7 @@ class HumanML3D(data.Dataset):
             self.t2m_dataset = TextOnlyDataset(self.opt, self.mean, self.std, self.split_file)
         else:
             self.w_vectorizer = WordVectorizer(pjoin(opt.cache_dir, 'glove'), 'our_vab')
-            self.t2m_dataset = Text2MotionDatasetV2(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer)
+            self.t2m_dataset = Text2MotionDatasetV2(self.opt, self.mean, self.std, self.split_file, self.w_vectorizer, self.multi_view)
             self.num_actions = 1 # dummy placeholder
 
         self.mean_gpu = torch.tensor(self.mean).to(device)[None, :, None, None]
