@@ -4,19 +4,33 @@ from diffusion import gaussian_diffusion as gd
 from diffusion.respace import SpacedDiffusion, space_timesteps
 from utils.parser_util import get_cond_mode
 from data_loaders.humanml_utils import HML_EE_JOINT_NAMES
+from peft import LoraConfig, inject_adapter_in_model
 
-def load_model_wo_clip(model, state_dict):
+def load_model_wo_clip(model, state_dict, lora_dict):
     # assert (state_dict['sequence_pos_encoder.pe'][:model.sequence_pos_encoder.pe.shape[0]] == model.sequence_pos_encoder.pe).all()  # TEST
     # assert (state_dict['embed_timestep.sequence_pos_encoder.pe'][:model.embed_timestep.sequence_pos_encoder.pe.shape[0]] == model.embed_timestep.sequence_pos_encoder.pe).all()  # TEST
-    del state_dict['sequence_pos_encoder.pe']  # no need to load it (fixed), and causes size mismatch for older models
-    del state_dict['embed_timestep.sequence_pos_encoder.pe']  # no need to load it (fixed), and causes size mismatch for older models
+    if state_dict.get('sequence_pos_encoder.pe', None):
+        del state_dict['equence_pos_encoder.pe']  # no need to load it (fixed), and causes size mismatch for older models
+    if state_dict.get('embed_timestep.sequence_pos_encoder.pe', None):
+        del state_dict['embed_timestep.sequence_pos_encoder.pe']  # no need to load it (fixed), and causes size mismatch for older models
     missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-    assert len(unexpected_keys) == 0
-    assert all([k.startswith('clip_model.') or 'sequence_pos_encoder' in k for k in missing_keys])
+    missing_keys_lora, unexpected_keys_lora = model.load_state_dict(lora_dict, strict=False)
+    assert len(unexpected_keys) == 0 and len(unexpected_keys_lora) == 0
+    assert all("lora" in k for k in missing_keys), f"Error: Not all missing keys are LoRA-related. Found keys without 'lora': { [k for k in missing_keys if 'lora' not in k] }"
+    assert all("lora" not in k for k in missing_keys_lora), f"Missing keys contain LoRA layers: { [k for k in missing_keys_lora if 'lora' in k] }"
 
 
 def create_model_and_diffusion(args, data):
     model = MDM(**get_model_args(args, data))
+
+    # lora_config = LoraConfig(
+    #     r=16,
+    #     lora_alpha=32,
+    #     init_lora_weights=True,
+    #     target_modules=["attn"]
+    # )
+    # model.clip_model = inject_adapter_in_model(lora_config, model.clip_model)
+
     diffusion = create_gaussian_diffusion(args)
     return model, diffusion
 
@@ -69,6 +83,7 @@ def get_model_args(args, data):
             'pos_embed_max_len': args.pos_embed_max_len, 'mask_frames': args.mask_frames,
             'pred_len': args.pred_len, 'context_len': args.context_len, 'emb_policy': emb_policy,
             'all_goal_joint_names': all_goal_joint_names, 'multi_target_cond': multi_target_cond, 'multi_encoder_type': multi_encoder_type, 'target_enc_layers': target_enc_layers,
+            'save_dir': args.save_dir
             }
 
 

@@ -2,10 +2,16 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import sys
+sys.path.insert(0, "/home/mengqing/usr/motion-diffusion-model")
 import clip
 from model.rotation2xyz import Rotation2xyz
 from model.BERT.BERT_encoder import load_bert
 from utils.misc import WeightedSum
+from utils.lora_util import apply_lora_attn_mlp, count_parameters, save_trainable_parameter_names
+from utils.dist_util import dev
+
+
 
 
 class MDM(nn.Module):
@@ -14,7 +20,6 @@ class MDM(nn.Module):
                  ablation=None, activation="gelu", legacy=False, data_rep='rot6d', dataset='amass', clip_dim=512,
                  arch='trans_enc', emb_trans_dec=False, clip_version=None, **kargs):
         super().__init__()
-
         self.legacy = legacy
         self.modeltype = modeltype
         self.njoints = njoints
@@ -48,11 +53,9 @@ class MDM(nn.Module):
         self.mask_frames = kargs.get('mask_frames', False)
         self.arch = arch
         self.gru_emb_dim = self.latent_dim if self.arch == 'gru' else 0
-        self.input_process = InputProcess(self.data_rep, self.input_feats+self.gru_emb_dim, self.latent_dim)
 
         self.emb_policy = kargs.get('emb_policy', 'add')
 
-        self.sequence_pos_encoder = PositionalEncoding(self.latent_dim, self.dropout, max_len=kargs.get('pos_embed_max_len', 5000))
         self.emb_trans_dec = emb_trans_dec
 
         self.pred_len = kargs.get('pred_len', 0)
@@ -63,41 +66,7 @@ class MDM(nn.Module):
         
         self.multi_target_cond = kargs.get('multi_target_cond', False)
         self.multi_encoder_type = kargs.get('multi_encoder_type', 'multi')
-        self.target_enc_layers = kargs.get('target_enc_layers', 1)
-        if self.multi_target_cond:
-            if self.multi_encoder_type == 'multi':
-                self.embed_target_cond = EmbedTargetLocMulti(self.all_goal_joint_names, self.latent_dim)
-            elif self.multi_encoder_type == 'single':
-               self.embed_target_cond = EmbedTargetLocSingle(self.all_goal_joint_names, self.latent_dim, self.target_enc_layers)       
-            elif self.multi_encoder_type == 'split':
-               self.embed_target_cond = EmbedTargetLocSplit(self.all_goal_joint_names, self.latent_dim, self.target_enc_layers)     
-        
-        if self.arch == 'trans_enc':
-            print("TRANS_ENC init")
-            seqTransEncoderLayer = nn.TransformerEncoderLayer(d_model=self.latent_dim,
-                                                              nhead=self.num_heads,
-                                                              dim_feedforward=self.ff_size,
-                                                              dropout=self.dropout,
-                                                              activation=self.activation)
-
-            self.seqTransEncoder = nn.TransformerEncoder(seqTransEncoderLayer,
-                                                         num_layers=self.num_layers)
-        elif self.arch == 'trans_dec':
-            print("TRANS_DEC init")
-            seqTransDecoderLayer = nn.TransformerDecoderLayer(d_model=self.latent_dim,
-                                                              nhead=self.num_heads,
-                                                              dim_feedforward=self.ff_size,
-                                                              dropout=self.dropout,
-                                                              activation=activation)
-            self.seqTransDecoder = nn.TransformerDecoder(seqTransDecoderLayer,
-                                                         num_layers=self.num_layers)
-        elif self.arch == 'gru':
-            print("GRU init")
-            self.gru = nn.GRU(self.latent_dim, self.latent_dim, num_layers=self.num_layers, batch_first=True)
-        else:
-            raise ValueError('Please choose correct architecture [trans_enc, trans_dec, gru]')
-
-        self.embed_timestep = TimestepEmbedder(self.latent_dim, self.sequence_pos_encoder)
+        self.target_enc_layers = kargs.get('target_enc_layers', 1)     
 
         if self.cond_mode != 'no_cond':
             if 'text' in self.cond_mode:
@@ -109,7 +78,60 @@ class MDM(nn.Module):
                 if self.text_encoder_type == "clip":
                     print('Loading CLIP...')
                     self.clip_version = clip_version
-                    self.clip_model = self.load_and_freeze_clip(clip_version)
+                    self.clip_model = self.load_clip(clip_version)
+                    self.clip_model = apply_lora_attn_mlp(self.clip_model, encoder_type='text', mlp=True, attn=True)
+                    old_weight = self.clip_model.token_embedding.weight
+
+                    self.clip_model_ori = self.load_clip(clip_version).eval()
+                    ## freeze the weight of cli_model_ori
+                    for param in self.clip_model_ori.parameters():
+                        param.requires_grad = False
+
+                    ########## 修改self.clip_model
+                    new_vocab_size = old_weight.shape[0] + 3
+                    embedding_dim = old_weight.shape[1]
+
+                    # 创建新的 embedding 层
+                    clip_token_embedding = nn.Embedding(new_vocab_size, embedding_dim)
+
+                    # 复制原有的 embedding 权重
+                    with torch.no_grad():
+                        clip_token_embedding.weight[:old_weight.shape[0]].copy_(old_weight)
+                        nn.init.normal_(clip_token_embedding.weight[old_weight.shape[0]:], mean=0.0, std=0.02)
+
+                    # 设置整个 embedding 参数为可训练
+                    clip_token_embedding.weight.requires_grad = True
+
+                    # 替换模型中的 embedding 层
+                    self.clip_model.token_embedding = clip_token_embedding
+
+                    # 创建 mask，仅让最后 3 行更新
+                    mask = torch.zeros_like(self.clip_model.token_embedding.weight, device=dev())
+                    mask[old_weight.shape[0]:] = 1.0  # 只更新最后3个 token
+
+                    # 添加 hook
+                    def selective_grad_hook(grad):
+                        return grad * mask
+
+                    self.clip_model.token_embedding.weight.register_hook(selective_grad_hook)
+
+                    for param in self.clip_model.token_projection.parameters():
+                        param.requires_grad = True
+
+                    save_dir=kargs.get("save_dir", None)
+                    if save_dir is not None:
+                        save_trainable_parameter_names(
+                            models_dict={
+                                "clip_model": self.clip_model,
+                                "clip_model_ori": self.clip_model_ori,
+                            },
+                            save_dir=save_dir,
+                            filename_prefix="trainable_params"
+                        )
+                    
+                    count_parameters(self.clip_model)
+                    count_parameters(self.clip_model_ori)
+                    
                     self.encode_text = self.clip_encode_text
                 elif self.text_encoder_type == 'bert':
                     assert self.arch == 'trans_dec'
@@ -122,31 +144,19 @@ class MDM(nn.Module):
                     self.clip_dim = 768
                 else:
                     raise ValueError('We only support [CLIP, BERT] text encoders') 
-                
-                self.embed_text = nn.Linear(self.clip_dim, self.latent_dim)
-                
+                                
             if 'action' in self.cond_mode:
                 self.embed_action = EmbedAction(self.num_actions, self.latent_dim)
                 print('EMBED ACTION')
-
-        self.output_process = OutputProcess(self.data_rep, self.input_feats, self.latent_dim, self.njoints,
-                                            self.nfeats)
 
         self.rot2xyz = Rotation2xyz(device='cpu', dataset=self.dataset)
 
     def parameters_wo_clip(self):
         return [p for name, p in self.named_parameters() if not name.startswith('clip_model.')]
 
-    def load_and_freeze_clip(self, clip_version):
+    def load_clip(self, clip_version):
         clip_model, clip_preprocess = clip.load(clip_version, device='cpu',
                                                 jit=False)  # Must set jit=False for training
-        clip.model.convert_weights(
-            clip_model)  # Actually this line is unnecessary since clip by default already on float16
-
-        # Freeze CLIP weights
-        clip_model.eval()
-        for p in clip_model.parameters():
-            p.requires_grad = False
 
         return clip_model
 
@@ -163,19 +173,24 @@ class MDM(nn.Module):
     def clip_encode_text(self, raw_text):
         # raw_text - list (batch_size length) of strings with input text prompts
         device = next(self.parameters()).device
-        max_text_len = 20 if self.dataset in ['humanml', 'kit'] else None  # Specific hardcoding for humanml dataset
+        max_text_len = 75 if self.dataset in ['humanml', 'kit'] else None  # Specific hardcoding for humanml dataset
         if max_text_len is not None:
             default_context_length = 77
             context_length = max_text_len + 2 # start_token + 20 + end_token
-            assert context_length < default_context_length
-            texts = clip.tokenize(raw_text, context_length=context_length, truncate=True).to(device) # [bs, context_length] # if n_tokens > context_length -> will truncate
-            # print('texts', texts.shape)
-            zero_pad = torch.zeros([texts.shape[0], default_context_length-context_length], dtype=texts.dtype, device=texts.device)
-            texts = torch.cat([texts, zero_pad], dim=1)
-            # print('texts after pad', texts.shape, texts)
+            assert context_length <= default_context_length
+            texts, texts_tokens = clip.tokenize(raw_text, context_length=context_length, truncate=True) # [bs, context_length] # if n_tokens > context_length -> will truncate
+            texts_lens_list = [len(text_token) for text_token in texts_tokens]
+            texts_tokens_padded=torch.zeros([texts.shape[0], default_context_length], dtype=texts.dtype, device=texts.device)
+            for i, text_tokens in enumerate(texts_tokens):
+                texts_tokens_padded[i, :texts_lens_list[i]] = torch.tensor(text_tokens)
+
         else:
             texts = clip.tokenize(raw_text, truncate=True).to(device) # [bs, context_length] # if n_tokens > 77 -> will truncate
-        return self.clip_model.encode_text(texts).float().unsqueeze(0)
+
+        texts = texts.to(device)
+        texts_tokens_padded = texts_tokens_padded.to(device)
+        
+        return self.clip_model.encode_text(texts, texts_lens_list=texts_lens_list).float(), self.clip_model_ori.encode_text(texts_tokens_padded, token_projection=False).float(), texts_lens_list
     
     def bert_encode_text(self, raw_text):
         # enc_text = self.clip_model(raw_text)
@@ -191,96 +206,13 @@ class MDM(nn.Module):
         x: [batch_size, njoints, nfeats, max_frames], denoted x_t in the paper
         timesteps: [batch_size] (int)
         """
-        bs, njoints, nfeats, nframes = x.shape
-        time_emb = self.embed_timestep(timesteps)  # [1, bs, d]
-
-        if 'target_cond' in y.keys():
-            # NOTE: We don't use CFG for joints - but we do wat to support uncond sampling for generation and eval!
-            time_emb += self.mask_cond(self.embed_target_cond(y['target_cond'], y['target_joint_names'], y['is_heading'])[None], force_mask=y.get('target_uncond', False))  # For uncond support and CFG
-            # time_emb += self.embed_target_cond(y['target_cond'], y['target_joint_names'], y['is_heading'])[None]  
-
-        # Build input for prefix completion
-        if self.is_prefix_comp:
-            x = torch.cat([y['prefix'], x], dim=-1)
-            y['mask'] = torch.cat([torch.ones([bs, 1, 1, self.context_len], dtype=y['mask'].dtype, device=y['mask'].device), 
-                                   y['mask']], dim=-1)
-
-        force_mask = y.get('uncond', False)
         if 'text' in self.cond_mode:
             if 'text_embed' in y.keys():  # caching option
                 enc_text = y['text_embed']
             else:
-                enc_text = self.encode_text(y['text'])
-            if type(enc_text) == tuple:
-                enc_text, text_mask = enc_text
-                if text_mask.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
-                    text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
-            text_emb = self.embed_text(self.mask_cond(enc_text, force_mask=force_mask))  # casting mask for the single-prompt-for-all case
-            if self.emb_policy == 'add':
-                emb = text_emb + time_emb
-            else:
-                emb = torch.cat([time_emb, text_emb], dim=0)
-                text_mask = torch.cat([torch.zeros_like(text_mask[:, 0:1]), text_mask], dim=1)
-        if 'action' in self.cond_mode:
-            action_emb = self.embed_action(y['action'])
-            emb = time_emb + self.mask_cond(action_emb, force_mask=force_mask)
-        if self.cond_mode == 'no_cond': 
-            # unconstrained
-            emb = time_emb
+                model_output, target_texts, texts_len_list = self.encode_text(y['text'])
 
-        if self.arch == 'gru':
-            x_reshaped = x.reshape(bs, njoints*nfeats, 1, nframes)
-            emb_gru = emb.repeat(nframes, 1, 1)     #[#frames, bs, d]
-            emb_gru = emb_gru.permute(1, 2, 0)      #[bs, d, #frames]
-            emb_gru = emb_gru.reshape(bs, self.latent_dim, 1, nframes)  #[bs, d, 1, #frames]
-            x = torch.cat((x_reshaped, emb_gru), axis=1)  #[bs, d+joints*feat, 1, #frames]
-
-        x = self.input_process(x)
-
-        # TODO - move to collate
-        frames_mask = None
-        is_valid_mask = y['mask'].shape[-1] > 1  # Don't use mask with the generate script
-        if self.mask_frames and is_valid_mask:
-            frames_mask = torch.logical_not(y['mask'][..., :x.shape[0]].squeeze(1).squeeze(1)).to(device=x.device)
-            if self.emb_trans_dec or self.arch == 'trans_enc':
-                step_mask = torch.zeros((bs, 1), dtype=torch.bool, device=x.device)
-                frames_mask = torch.cat([step_mask, frames_mask], dim=1)
-
-        if self.arch == 'trans_enc':
-            # adding the timestep embed
-            xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
-            xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
-            output = self.seqTransEncoder(xseq, src_key_padding_mask=frames_mask)[1:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
-
-        elif self.arch == 'trans_dec':
-            if self.emb_trans_dec:
-                xseq = torch.cat((time_emb, x), axis=0)
-            else:
-                xseq = x
-            xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
-
-            if self.text_encoder_type == 'clip':
-                output = self.seqTransDecoder(tgt=xseq, memory=emb, tgt_key_padding_mask=frames_mask)
-            elif self.text_encoder_type == 'bert':
-                output = self.seqTransDecoder(tgt=xseq, memory=emb, memory_key_padding_mask=text_mask, tgt_key_padding_mask=frames_mask)  # Rotem's bug fix
-            else:
-                raise ValueError()
-
-            if self.emb_trans_dec:
-                output = output[1:] # [seqlen, bs, d]
-
-        elif self.arch == 'gru':
-            xseq = x
-            xseq = self.sequence_pos_encoder(xseq)  # [seqlen, bs, d]
-            output, _ = self.gru(xseq)
-
-        # Extract completed suffix
-        if self.is_prefix_comp:
-            output = output[self.context_len:]
-            y['mask'] = y['mask'][..., self.context_len:]
-        
-        output = self.output_process(output)  # [bs, njoints, nfeats, nframes]
-        return output
+        return model_output, target_texts, texts_len_list
 
 
     def _apply(self, fn):

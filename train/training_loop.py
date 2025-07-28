@@ -36,6 +36,8 @@ from utils.motion_util import pad_joints_to_24
 from MotionBERT.lib.utils.utils_data import crop_scale
 from typing import Tuple, Dict
 from torch.cuda.amp import GradScaler, autocast
+from utils.skeleton_pool import STPool
+import loratorch as lora
 
 
 # For ImageNet experiments, this was a good default value.
@@ -142,6 +144,9 @@ class TrainLoop:
         self.motion_emb_std = np.load("/home/mengqing/usr/motion-diffusion-model/dataset/motion_emb_std.npy")
         self.pooling_size=args.pooling
 
+        self.st_pool=STPool(dataset="t2m")
+        self.st_pool.to(self.device)
+
     def _load_and_sync_parameters(self):
         resume_checkpoint = self.find_resume_checkpoint() or self.resume_checkpoint
 
@@ -154,13 +159,18 @@ class TrainLoop:
             logger.log(f"loading model from checkpoint: {resume_checkpoint}...")
             state_dict = dist_util.load_state_dict(
                 resume_checkpoint, map_location=dist_util.dev())
+            resume_lora_checkpoint = resume_checkpoint.replace('model', 'lora')
+            lora_dict = dist_util.load_state_dict(
+                resume_lora_checkpoint, map_location=dist_util.dev()
+            )
 
             if 'model_avg' in state_dict:
                 print('loading both model and model_avg')
                 state_dict, state_dict_avg = state_dict['model'], state_dict[
                     'model_avg']
-                load_model_wo_clip(self.model, state_dict)
-                load_model_wo_clip(self.model_avg, state_dict_avg)
+                lora_dict, lora_dict_avg = lora_dict['lora'], lora_dict['lora_avg']
+                load_model_wo_clip(self.model, state_dict, lora_dict)
+                load_model_wo_clip(self.model_avg, state_dict_avg, lora_dict_avg)
             else:
                 load_model_wo_clip(self.model, state_dict)
                 if self.args.use_ema:
@@ -295,15 +305,18 @@ class TrainLoop:
                     break
                 
                 MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'])   ## 可视化了应该没什么问题，3D的直接用scale_range[1,1]，不用考虑2D，因为AMASS它也是这么做的
-                MB_emb_normed= (MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / torch.tensor(self.motion_emb_std, device=MB_emb.device)
-                MB_emb_normed_pooled=MB_emb_normed[:, ::self.pooling_size, :]
+                MB_emb_normed= ((MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / torch.tensor(self.motion_emb_std, device=MB_emb.device)).reshape(*MB_emb.shape[:2], 17, 512).contiguous()
+                # MB_emb_normed_pooled=MB_emb_normed[:, ::self.pooling_size, :]
+                MB_emb_normed_st_pooled = self.st_pool(MB_emb_normed)
+                MB_emb_normed_st_pooled = MB_emb_normed_st_pooled.reshape(MB_emb_normed_st_pooled.shape[0], -1, MB_emb_normed_st_pooled.shape[-1])
                 
                 # self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency,看了一下好像没有什么用
                 # motion = motion.to(self.device) ## 这个地方的motion确认过了都是没有问题的
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
 
                 with autocast():
-                    self.run_step(MB_emb_normed_pooled.permute(0,2,1).unsqueeze(2), cond, scaler)
+                    # self.run_step(MB_emb_normed_pooled.permute(0,2,1).unsqueeze(2), cond, scaler)
+                    self.run_step(MB_emb_normed_st_pooled, cond, scaler)    ## [bs, 28, 512]
                 if self.total_step() % self.log_interval == 0:  ## 1000
                     for k,v in logger.get_current().dumpkvs().items():
                         if k == 'loss':
@@ -381,8 +394,9 @@ class TrainLoop:
         self.mp_trainer.optimize(self.opt, scaler)
         scaler.update()
         self.update_average_model()
-        self._anneal_lr()
+        self._anneal_lr()   ## 这个就没有指定，所以啥也没干
         self.log_step()
+        lora.register_model_param_after_backward(self.model)
 
     def update_average_model(self):
         # update the average model using exponential moving average
@@ -412,14 +426,14 @@ class TrainLoop:
                 self.diffusion.training_losses,
                 self.ddp_model,
                 # micro,  # [bs, ch, image_size, image_size]
-                micro,  # [bs, 17x512, seq_len]
+                micro,  # [bs, 512, 1, token_num=28]
                 t,  # [bs](int) sampled timesteps
                 model_kwargs=micro_cond,
                 dataset=self.data.dataset,
                 pooling_size=self.pooling_size
             )
 
-            if last_batch or not self.use_ddp:
+            if last_batch or not self.use_ddp:  ## 走的这个
                 losses = compute_losses()
             else:
                 with self.ddp_model.no_sync():
@@ -491,31 +505,44 @@ class TrainLoop:
     
     def save(self):
         def save_checkpoint():
-            def del_clip(state_dict):
-                # Do not save CLIP weights
-                clip_weights = [
-                    e for e in state_dict.keys() if e.startswith('clip_model.')
-                ]
-                for e in clip_weights:
-                    del state_dict[e]
+            # def del_clip(state_dict):
+            #     # Do not save CLIP weights
+            #     clip_weights = [
+            #         e for e in state_dict.keys() if e.startswith('clip_model_ori.')
+            #     ]
+            #     for e in clip_weights:
+            #         del state_dict[e]
 
-            if self.use_fp16:
-                state_dict = self.model.state_dict()
-            else:
-                state_dict = self.mp_trainer.master_params_to_state_dict(
-                    self.mp_trainer.master_params)
-            del_clip(state_dict)
+            # if self.use_fp16:
+            #     state_dict = self.model.state_dict()
+            # else:
+            #     # state_dict = self.mp_trainer.master_params_to_state_dict(
+            #     #     self.mp_trainer.master_params)
+            #     state_dict = self.model.state_dict()
+            # del_clip(state_dict)
 
             if self.args.use_ema:
                 # save both the model and the average model
-                state_dict_avg = self.model_avg.state_dict()
-                del_clip(state_dict_avg)
-                state_dict = {'model': state_dict, 'model_avg': state_dict_avg}
+                # state_dict_avg = self.model_avg.state_dict()
+                # del_clip(state_dict_avg)
+                model_dict=self.model.state_dict()
+                model_lora_dict=lora.lora_state_dict(self.model)
+                filtered_model_dict={k: v for k, v in model_dict.items() if k not in model_lora_dict}
+
+                model_avg_dict=self.model_avg.state_dict()
+                model_avg_lora_dict=lora.lora_state_dict(self.model_avg)
+                filtered_model_avg_dict={k: v for k, v in model_avg_dict.items() if k not in model_avg_lora_dict}
+                state_dict = {'model': filtered_model_dict, 'model_avg': filtered_model_avg_dict}
+                state_dict_lora = {'lora': model_lora_dict, 'lora_avg': model_avg_lora_dict}
 
             logger.log(f"saving model...")
             filename = self.ckpt_file_name()
+            filename_lora = filename.replace('model', 'lora')
             with bf.BlobFile(bf.join(self.save_dir, filename), "wb") as f:
                 torch.save(state_dict, f)
+            logger.log(f"saving LoRA parameters...")
+            with bf.BlobFile(bf.join(self.save_dir, filename_lora), "wb") as f:
+                torch.save(state_dict_lora, f)
 
         save_checkpoint()
 

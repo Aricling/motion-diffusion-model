@@ -48,7 +48,7 @@ def main():
     model_params = 0
     for parameter in model_backbone.parameters():
         model_params = model_params + parameter.numel()
-    print('INFO: MotionBERT Trainable parameter count:', model_params)
+    print('INFO: MotionBERT  parameter count:', model_params)
     print('Loading checkpoint', args.evaluate_motionbert)
     checkpoint = torch.load(args.evaluate_motionbert, map_location=lambda storage, loc: storage)   ## 这里目前默认是使用162M的模型
     model_backbone.load_state_dict(remove_module_prefix(checkpoint['model_pos']), strict=True)

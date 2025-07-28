@@ -372,14 +372,14 @@ class Text2MotionDatasetV2(data.Dataset):
             coin2 = np.random.choice(['single', 'single', 'double'])
         else:
             coin2 = 'single'
-
-        if coin2 == 'double':
-            m_length = (m_length // self.opt.unit_length - 1) * self.opt.unit_length
-        elif coin2 == 'single':
-            m_length = (m_length // self.opt.unit_length) * self.opt.unit_length
+        
+            if coin2 == 'double':
+                m_length = (m_length // self.opt.unit_length - 1) * self.opt.unit_length
+            elif coin2 == 'single':
+                m_length = (m_length // self.opt.unit_length) * self.opt.unit_length
         
         original_length = None
-        if self.opt.fixed_len > 0:
+        if self.opt.fixed_len > 0:  ## 这一步没什么用，直接跳过
             # Crop fixed_len
             original_length = m_length
             m_length = self.opt.fixed_len

@@ -44,3 +44,40 @@ def masked_goal_l2(pred_goal, ref_goal, cond, all_goal_joint_names):
 
     loss =  loc_loss + heading_loss
     return loss
+
+def clip_finetune_l2_loss(model_output, raw_text_output, MB_targets, lens_list):
+    batch_size, seq_len, dim = model_output.shape
+    lens_tensor = torch.tensor(lens_list, device=model_output.device)
+    
+    # Mask generation for clip loss computation
+    mask = torch.arange(seq_len, device=model_output.device).expand(batch_size, seq_len) < lens_tensor.unsqueeze(1)
+    mask = mask.unsqueeze(-1).float()
+    
+    # Clip loss computation
+    diff_clip = model_output - raw_text_output
+    loss_clip = ((diff_clip ** 2) * mask).sum() / (mask.sum() * dim)
+    
+    # Motion token loss computation using batch processing
+    # Construct a tensor to hold all `lens_sub + 1` and `lens_sub + 1 + 28` indices
+    valid_motion_indices = torch.stack([
+        lens_tensor + 1,
+        lens_tensor + 1 + 28
+    ], dim=1)  # Shape: [batch_size, 2]
+
+    # Use indices to gather the valid motion token slices from model_output
+    # Note: valid_motion_indices[:, 0] means start index, valid_motion_indices[:, 1] means end index
+    motion_slices = torch.stack([
+        model_output[b_idx, valid_motion_indices[b_idx, 0]:valid_motion_indices[b_idx, 1]]
+        for b_idx in range(batch_size)
+    ], dim=0)  # Shape: [batch_size, 28, dim]
+
+    diff_motion = motion_slices - MB_targets  # Compute differences, [batch_size, 28, dim]
+    
+    loss_motion_token = (diff_motion ** 2).sum() / diff_motion.numel()
+    
+    loss_dict = {
+        'loss_clip': loss_clip,
+        'loss_motion_token': loss_motion_token
+    }
+    
+    return loss_dict

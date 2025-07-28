@@ -16,7 +16,7 @@ from copy import deepcopy
 from diffusion.nn import mean_flat, sum_flat
 from diffusion.losses import normal_kl, discretized_gaussian_log_likelihood
 from data_loaders.humanml.scripts import motion_process
-from utils.loss_util import masked_l2, masked_goal_l2
+from utils.loss_util import masked_l2, masked_goal_l2, clip_finetune_l2_loss
 from data_loaders.humanml.scripts.motion_process import get_target_location
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps, scale_betas=1.):
@@ -202,7 +202,9 @@ class GaussianDiffusion:
         )
 
         # self.l2_loss = lambda a, b: (a - b) ** 2  # th.nn.MSELoss(reduction='none')  # must be None for handling mask later on.
-        self.masked_l2 = masked_l2
+        # self.masked_l2 = masked_l2
+        self.clip_finetune_l2_loss=clip_finetune_l2_loss
+        self.lambda_clip_motion=0.3
 
 
 
@@ -1248,9 +1250,7 @@ class GaussianDiffusion:
             model_kwargs = {}
         if noise is None:
             noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise)
-
-        terms = {}
+        # x_t = self.q_sample(x_start, t, noise=noise)
 
         if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
             terms["loss"] = self._vb_terms_bpd(
@@ -1264,7 +1264,8 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
+            # model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
+            model_output, targets_texts, texts_len_list = model(x_start, self._scale_timesteps(t), **model_kwargs)
 
             if self.model_var_type in [
                 ModelVarType.LEARNED,
@@ -1289,15 +1290,16 @@ class GaussianDiffusion:
                     terms["vb"] *= self.num_timesteps / 1000.0
 
             target = {
-                ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(
-                    x_start=x_start, x_t=x_t, t=t
-                )[0],
+                # ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(
+                #     x_start=x_start, x_t=x_t, t=t
+                # )[0],
                 ModelMeanType.START_X: x_start, ## 选的就是这个
                 ModelMeanType.EPSILON: noise,
             }[self.model_mean_type]
-            assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
+            # assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
 
-            terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
+            terms = self.clip_finetune_l2_loss(model_output, targets_texts, x_start, texts_len_list)
+            # terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
 
             target_xyz, model_output_xyz = None, None
 
@@ -1347,7 +1349,9 @@ class GaussianDiffusion:
                 terms["target_loc"] = masked_goal_l2(pred_target, ref_target, model_kwargs['y'], model.all_goal_joint_names)
                             
 
-            terms["loss"] = terms["rot_mse"] + terms.get('vb', 0.) +\
+            terms["loss"] = self.lambda_clip_motion * terms["loss_clip"] + \
+                            ((1-self.lambda_clip_motion) * terms["loss_motion_token"]) +\
+                            (terms.get('vb', 0.)) +\
                             (self.lambda_vel * terms.get('vel_mse', 0.)) +\
                             (self.lambda_rcxyz * terms.get('rcxyz_mse', 0.)) + \
                             (self.lambda_target_loc * terms.get('target_loc', 0.)) + \
