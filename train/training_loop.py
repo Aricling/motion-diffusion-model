@@ -240,6 +240,7 @@ class TrainLoop:
                     17, 19, 21
                 ],  # SMPL到H36M的关节映射
         length_list: int=None,
+        name_list : str=None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         处理运动数据并提取MotionBERT表示
@@ -274,7 +275,7 @@ class TrainLoop:
             motion_2d[..., 2] = 1
            
             motion_emb_list=[]
-            for motion_2d_i, length in zip(motion_2d, length_list):     ## motion_2d.shape=[bs, 196, 17, 3]
+            for motion_2d_i, length, name in zip(motion_2d, length_list, name_list):     ## motion_2d.shape=[bs, 196, 17, 3]
                 motion_2d_i_scaled = torch.tensor(
                     crop_scale(motion_2d_i[:length].cpu().numpy(), scale_range=[1, 1]),
                     device=micro.device,
@@ -284,7 +285,7 @@ class TrainLoop:
                 # 5. 通过MotionBERT提取表示
                 with torch.inference_mode():
                     motion_2d_scaled_i = motion_2d_i_scaled.unsqueeze(0)    ## [seq_len, 17, 3] -> [1, seq_len, 17, 3]
-                    motion_emb = self.MB_backbone.get_representation(motion_2d_scaled_i)
+                    motion_emb = self.MB_backbone.get_representation(motion_2d_scaled_i)    ## 应该保存的是它
                     padded_motion_emb = torch.zeros(1, 196, 17, 512, device=motion_emb.device)
                     padded_motion_emb[:, :motion_emb.shape[1], :, :] = motion_emb
                     motion_emb_list.append(padded_motion_emb)
@@ -304,7 +305,7 @@ class TrainLoop:
                 if not (not self.lr_anneal_steps or self.total_step() < self.lr_anneal_steps):
                     break
                 
-                MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'])   ## 可视化了应该没什么问题，3D的直接用scale_range[1,1]，不用考虑2D，因为AMASS它也是这么做的
+                MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'], name_list=cond['y']['db_key'])   ## 可视化了应该没什么问题，3D的直接用scale_range[1,1]，不用考虑2D，因为AMASS它也是这么做的
                 MB_emb_normed= ((MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / torch.tensor(self.motion_emb_std, device=MB_emb.device)).reshape(*MB_emb.shape[:2], 17, 512).contiguous()
                 # MB_emb_normed_pooled=MB_emb_normed[:, ::self.pooling_size, :]
                 MB_emb_normed_st_pooled = self.st_pool(MB_emb_normed)

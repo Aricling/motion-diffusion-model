@@ -372,7 +372,11 @@ class Text2MotionDatasetV2(data.Dataset):
             coin2 = np.random.choice(['single', 'single', 'double'])
         else:
             coin2 = 'single'
-        
+
+        debug=False
+        if debug:
+            pass
+        else:
             if coin2 == 'double':
                 m_length = (m_length // self.opt.unit_length - 1) * self.opt.unit_length
             elif coin2 == 'single':
@@ -395,7 +399,7 @@ class Text2MotionDatasetV2(data.Dataset):
                 motion, np.zeros((self.max_motion_length-m_length, motion.shape[1]))
             ], axis=0)
 
-        return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens)
+        return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), key
 
 
 '''For use of training baseline'''
