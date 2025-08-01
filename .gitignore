@@ -138,3 +138,8 @@ slurm**/
 *.err
 *.slurm
 .vscode/
+dataset/motion_emb_mean.npy
+dataset/motion_emb_std.npy
+dataset/t2m_train.npy
+dataset/HumanML3D
+MotionBERT/
