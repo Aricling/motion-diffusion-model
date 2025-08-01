@@ -247,7 +247,7 @@ class MDM(nn.Module):
                 frames_mask = torch.cat([step_mask, frames_mask], dim=1)
 
         if self.arch == 'trans_enc':
-            # adding the timestep embed
+            # adding the timestep emb
             xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
             xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
             output = self.seqTransEncoder(xseq, src_key_padding_mask=frames_mask)[1:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
