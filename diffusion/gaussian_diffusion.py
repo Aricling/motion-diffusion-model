@@ -1298,7 +1298,7 @@ class GaussianDiffusion:
             }[self.model_mean_type]
             # assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
 
-            terms = self.clip_finetune_l2_loss(model_output, targets_texts, x_start, texts_len_list)
+            terms = self.clip_finetune_l2_loss(model_output, targets_texts, x_start, texts_len_list, motion_lens_list=model_kwargs['y']['lengths'])
             # terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
 
             target_xyz, model_output_xyz = None, None

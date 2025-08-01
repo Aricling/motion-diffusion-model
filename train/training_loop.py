@@ -35,7 +35,7 @@ from utils.motion_util import pad_joints_to_24
 
 from MotionBERT.lib.utils.utils_data import crop_scale
 from typing import Tuple, Dict
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from utils.skeleton_pool import STPool
 import loratorch as lora
 
@@ -144,7 +144,7 @@ class TrainLoop:
         self.motion_emb_std = np.load("/home/mengqing/usr/motion-diffusion-model/dataset/motion_emb_std.npy")
         self.pooling_size=args.pooling
 
-        self.st_pool=STPool(dataset="t2m")
+        self.st_pool=STPool(dataset="t2m", temporal_stride=49)
         self.st_pool.to(self.device)
 
     def _load_and_sync_parameters(self):
@@ -305,17 +305,19 @@ class TrainLoop:
                 if not (not self.lr_anneal_steps or self.total_step() < self.lr_anneal_steps):
                     break
                 
-                MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'], name_list=cond['y']['db_key'])   ## 可视化了应该没什么问题，3D的直接用scale_range[1,1]，不用考虑2D，因为AMASS它也是这么做的
-                MB_emb_normed= ((MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / torch.tensor(self.motion_emb_std, device=MB_emb.device)).reshape(*MB_emb.shape[:2], 17, 512).contiguous()
+                # MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'], name_list=cond['y']['db_key'])   ## 可视化了应该没什么问题，3D的直接用scale_range[1,1]，不用考虑2D，因为AMASS它也是这么做的
+                MB_emb_normed_st_pooled=cond['y']['MB_emb'].to(dist_util.dev())
+                # MB_emb=MB_emb.reshape(*MB_emb.shape[:2], -1)
+                # MB_emb_normed= ((MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / torch.tensor(self.motion_emb_std, device=MB_emb.device)).reshape(*MB_emb.shape[:2], 17, 512).contiguous()
                 # MB_emb_normed_pooled=MB_emb_normed[:, ::self.pooling_size, :]
-                MB_emb_normed_st_pooled = self.st_pool(MB_emb_normed)
-                MB_emb_normed_st_pooled = MB_emb_normed_st_pooled.reshape(MB_emb_normed_st_pooled.shape[0], -1, MB_emb_normed_st_pooled.shape[-1])
+                # MB_emb_normed_st_pooled = self.st_pool(MB_emb_normed)
+                # MB_emb_normed_st_pooled = MB_emb_normed_st_pooled.reshape(MB_emb_normed_st_pooled.shape[0], -1, MB_emb_normed_st_pooled.shape[-1])
                 
                 # self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency,看了一下好像没有什么用
                 # motion = motion.to(self.device) ## 这个地方的motion确认过了都是没有问题的
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
 
-                with autocast():
+                with autocast("cuda"):
                     # self.run_step(MB_emb_normed_pooled.permute(0,2,1).unsqueeze(2), cond, scaler)
                     self.run_step(MB_emb_normed_st_pooled, cond, scaler)    ## [bs, 28, 512]
                 if self.total_step() % self.log_interval == 0:  ## 1000

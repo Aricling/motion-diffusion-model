@@ -338,6 +338,7 @@ class Text2MotionDatasetV2(data.Dataset):
         key = self.name_list[idx]
         data = self.data_dict[key]
         motion, m_length, text_list = data['motion'], data['length'], data['text']
+        MB_emb = np.load(os.path.join(self.opt.MB_rep_root, f"{key}.npy"))
         if self.multi_view:
             ## 随机选择视角
             R=random.choices(self.R_list, weights=self.R_weights, k=1)[0]
@@ -373,9 +374,9 @@ class Text2MotionDatasetV2(data.Dataset):
         else:
             coin2 = 'single'
 
-        debug=False
+        debug=True
         if debug:
-            pass
+            m_length = (m_length // self.opt.unit_length) * self.opt.unit_length
         else:
             if coin2 == 'double':
                 m_length = (m_length // self.opt.unit_length - 1) * self.opt.unit_length
@@ -388,9 +389,10 @@ class Text2MotionDatasetV2(data.Dataset):
             original_length = m_length
             m_length = self.opt.fixed_len
         
-        idx = random.randint(0, len(motion) - m_length)
-        motion = motion[idx:idx+m_length]
+        # idx = random.randint(0, len(motion) - m_length)
+        idx = random.randint(0, 0)
         motion = motion.reshape(motion.shape[0], -1)
+        motion = motion[idx:idx+m_length]
 
         length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
 
@@ -399,7 +401,7 @@ class Text2MotionDatasetV2(data.Dataset):
                 motion, np.zeros((self.max_motion_length-m_length, motion.shape[1]))
             ], axis=0)
 
-        return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), key
+        return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), MB_emb, key
 
 
 '''For use of training baseline'''

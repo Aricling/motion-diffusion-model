@@ -45,23 +45,25 @@ def masked_goal_l2(pred_goal, ref_goal, cond, all_goal_joint_names):
     loss =  loc_loss + heading_loss
     return loss
 
-def clip_finetune_l2_loss(model_output, raw_text_output, MB_targets, lens_list):
+def clip_finetune_l2_loss(model_output, raw_text_output, MB_targets, texts_lens_list, motion_lens_list):
     batch_size, seq_len, dim = model_output.shape
-    lens_tensor = torch.tensor(lens_list, device=model_output.device)
-    
+    texts_lens_tensor = torch.tensor(texts_lens_list, device=model_output.device)   ## 这里指的是text的length
+    motion_lens_tensor = torch.tensor(motion_lens_list, device=model_output.device) # motion frame lengths
+
+    # ----- Clip Loss -----
     # Mask generation for clip loss computation
-    mask = torch.arange(seq_len, device=model_output.device).expand(batch_size, seq_len) < lens_tensor.unsqueeze(1)
+    mask = torch.arange(seq_len, device=model_output.device).expand(batch_size, seq_len) < texts_lens_tensor.unsqueeze(1)
     mask = mask.unsqueeze(-1).float()
     
     # Clip loss computation
     diff_clip = model_output - raw_text_output
     loss_clip = ((diff_clip ** 2) * mask).sum() / (mask.sum() * dim)
     
-    # Motion token loss computation using batch processing
+    # ----- Motion Token Loss -----
     # Construct a tensor to hold all `lens_sub + 1` and `lens_sub + 1 + 28` indices
     valid_motion_indices = torch.stack([
-        lens_tensor + 1,
-        lens_tensor + 1 + 28
+        texts_lens_tensor + 1,
+        texts_lens_tensor + 1 + 28
     ], dim=1)  # Shape: [batch_size, 2]
 
     # Use indices to gather the valid motion token slices from model_output
@@ -73,7 +75,25 @@ def clip_finetune_l2_loss(model_output, raw_text_output, MB_targets, lens_list):
 
     diff_motion = motion_slices - MB_targets  # Compute differences, [batch_size, 28, dim]
     
-    loss_motion_token = (diff_motion ** 2).sum() / diff_motion.numel()
+    # ----- Motion Mask Generation -----
+    # 对于每个 batch，构造一个 [28] 的 mask：0 表示该位置的融合帧无效，1 表示有效
+    frame_group_count = 4
+    frames_per_group = 49
+    tokens_per_group = 7
+
+    # 生成融合帧是否有效的布尔 mask [batch_size, 4]
+    fuse_mask_4 = torch.arange(1, frame_group_count + 1, device=model_output.device).view(1, -1) * frames_per_group
+    # motion_lens_tensor: [B] → [B, 1]
+    fuse_mask_4 = motion_lens_tensor.view(-1, 1) >= fuse_mask_4  # [B, 4] 布尔值
+
+    # 扩展为每组 7 个 token → [B, 4, 7] → reshape 为 [B, 28]
+    motion_mask = fuse_mask_4.unsqueeze(-1).expand(-1, -1, tokens_per_group).reshape(batch_size, 28)  # [B, 28]
+
+    # 再加一个维度 [B, 28, 1] 以便广播到 diff_motion
+    motion_mask = motion_mask.unsqueeze(-1).float()
+
+    # 应用 mask 计算 loss
+    loss_motion_token = ((diff_motion ** 2) * motion_mask).sum() / motion_mask.sum() / dim
     
     loss_dict = {
         'loss_clip': loss_clip,

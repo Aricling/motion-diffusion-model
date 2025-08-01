@@ -58,6 +58,9 @@ def collate(batch):
     if 'orig_lengths' in notnone_batches[0]:
         cond['y'].update({'orig_lengths': torch.as_tensor([b['orig_lengths'] for b in notnone_batches])})
 
+    if 'MB_emb' in notnone_batches[0]:
+        cond['y'].update({'MB_emb': collate_tensors([b['MB_emb'] for b in notnone_batches])})
+
     if 'key' in notnone_batches[0]:
         cond['y'].update({'db_key': [b['key'] for b in notnone_batches]})
 
@@ -74,7 +77,8 @@ def t2m_collate(batch, target_batch_size):
         'text': b[2], #b[0]['caption']
         'tokens': b[6],
         'lengths': b[5],
-        'key': b[7] if len(b) > 7 else None,
+        'MB_emb': torch.tensor(b[7]).float(),
+        'key': b[8] if len(b) > 8 else None,
     } for b in full_batch]
     return collate(adapted_batch)
 

@@ -8,6 +8,7 @@ class STPool(nn.Module):
     def __init__(
         self,
         dataset="t2m",
+        temporal_stride = None
     ):
         if not dataset in ["t2m", "kit"]:
             raise ValueError("dataset should be 't2m' or 'kit'")
@@ -20,7 +21,7 @@ class STPool(nn.Module):
         self.skeleton_pool_1, self.skeleton_mapping_1 = self._get_skeleton_pooling(dataset, depth=1)
         self.skeleton_pool_1 = nn.Parameter(self.skeleton_pool_1, requires_grad=False) # [J_out, J_in]
         
-        self.temporal_pool = nn.AvgPool1d(kernel_size=49, stride=49)
+        self.temporal_pool = nn.AvgPool1d(kernel_size=temporal_stride, stride=temporal_stride)
     
     def _get_skeleton_pooling(self, dataset='t2m', depth=0):
         if depth == 0:
