@@ -256,7 +256,7 @@ if __name__ == '__main__':
 
     eval_platform_type = eval(args.train_platform_type)
     eval_platform = eval_platform_type(save_dir, name=log_name)
-    eval_platform.report_args(args, name='Args')
+    eval_platform.report_args(args, name='Args')    ## 没有写args
 
     print(f'Eval mode [{args.eval_mode}]')
     if args.eval_mode == 'debug':
@@ -302,13 +302,14 @@ if __name__ == '__main__':
     num_actions = gen_loader.dataset.num_actions
 
     logger.log("Creating model and diffusion...")
+    args.save_dir = os.path.dirname(args.model_path)
     model, diffusion = create_model_and_diffusion(args, gen_loader)
 
     logger.log(f"Loading checkpoints from [{args.model_path}]...")
     model = load_saved_model(model, args.model_path, use_avg=args.use_ema)
 
-    if args.guidance_param != 1:
-        model = ClassifierFreeSampleModel(model)   # wrapping model with the classifier-free sampler
+    # if args.guidance_param != 1:
+    #     model = ClassifierFreeSampleModel(model)   # wrapping model with the classifier-free sampler
     model.to(dist_util.dev())
     model.eval()  # disable random masking
 

@@ -5,6 +5,8 @@ from diffusion.respace import SpacedDiffusion, space_timesteps
 from utils.parser_util import get_cond_mode
 from data_loaders.humanml_utils import HML_EE_JOINT_NAMES
 from peft import LoraConfig, inject_adapter_in_model
+from utils import dist_util
+import os
 
 def load_model_wo_clip(model, state_dict, lora_dict):
     # assert (state_dict['sequence_pos_encoder.pe'][:model.sequence_pos_encoder.pe.shape[0]] == model.sequence_pos_encoder.pe).all()  # TEST
@@ -132,17 +134,30 @@ def create_gaussian_diffusion(args):
     )
 
 def load_saved_model(model, model_path, use_avg: bool=False):  # use_avg_model
-    state_dict = torch.load(model_path, map_location='cpu')
-    # Use average model when possible
+    state_dict = dist_util.load_state_dict(
+        model_path, map_location=dist_util.dev())
+    dir_path = os.path.dirname(model_path)               # 路径部分
+    filename = os.path.basename(model_path)              # 文件名部分，例如 "model000600000.pt"
+    new_filename = filename.replace("model", "lora", 1)  # 只替换第一个"model"
+
+    # 拼接新路径
+    resume_lora_checkpoint = os.path.join(dir_path, new_filename)
+    lora_dict = dist_util.load_state_dict(
+        resume_lora_checkpoint, map_location=dist_util.dev()
+    )
+
     if use_avg and 'model_avg' in state_dict.keys():
-    # if use_avg_model:
         print('loading avg model')
-        state_dict = state_dict['model_avg']
+        state_dict_avg = state_dict['model_avg']
+        lora_dict_avg = lora_dict['lora_avg']
+        load_model_wo_clip(model, state_dict_avg, lora_dict_avg)
     else:
         if 'model' in state_dict:
             print('loading model without avg')
             state_dict = state_dict['model']
+            lora_dict = lora_dict['lora']
+            load_model_wo_clip(model, state_dict, lora_dict)
         else:
-            print('checkpoint has no avg model, loading as usual.')
-    load_model_wo_clip(model, state_dict)
+            raise ValueError
+
     return model

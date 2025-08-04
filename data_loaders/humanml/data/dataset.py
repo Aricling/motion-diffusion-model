@@ -800,7 +800,7 @@ class HumanML3D(data.Dataset):
         opt.data_root = pjoin(abs_base_path, opt.data_root)
         opt.save_root = pjoin(abs_base_path, opt.save_root)
         opt.meta_dir = pjoin(abs_base_path, './dataset')
-        opt.use_cache = kwargs.get('use_cache', True)
+        opt.use_cache = kwargs.get('use_cache', False)
         opt.fixed_len = kwargs.get('fixed_len', 0)
         if opt.fixed_len > 0:
             opt.max_motion_length = opt.fixed_len

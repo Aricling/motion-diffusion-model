@@ -144,3 +144,4 @@ MotionBERT/*
 MotionBERT 
 dataset/motion_emb_mean.npy
 dataset/motion_emb_std.npy
+dataset/t2m_test.npy
