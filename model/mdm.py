@@ -6,6 +6,7 @@ import clip
 from model.rotation2xyz import Rotation2xyz
 from model.BERT.BERT_encoder import load_bert
 from utils.misc import WeightedSum
+from utils.lora_util import apply_lora_attn_mlp, init_finetuned_clip
 
 
 class MDM(nn.Module):
@@ -110,6 +111,8 @@ class MDM(nn.Module):
                     print('Loading CLIP...')
                     self.clip_version = clip_version
                     self.clip_model = self.load_and_freeze_clip(clip_version)
+                    self.clip_model = apply_lora_attn_mlp(self.clip_model, encoder_type='text', mlp=True, attn=True)
+                    self.clip_model, self.clip_model_avg = init_finetuned_clip(self.clip_model)
                     self.encode_text = self.clip_encode_text
                 elif self.text_encoder_type == 'bert':
                     assert self.arch == 'trans_dec'
@@ -140,14 +143,6 @@ class MDM(nn.Module):
     def load_and_freeze_clip(self, clip_version):
         clip_model, clip_preprocess = clip.load(clip_version, device='cpu',
                                                 jit=False)  # Must set jit=False for training
-        clip.model.convert_weights(
-            clip_model)  # Actually this line is unnecessary since clip by default already on float16
-
-        # Freeze CLIP weights
-        clip_model.eval()
-        for p in clip_model.parameters():
-            p.requires_grad = False
-
         return clip_model
 
     def mask_cond(self, cond, force_mask=False):
@@ -163,19 +158,24 @@ class MDM(nn.Module):
     def clip_encode_text(self, raw_text):
         # raw_text - list (batch_size length) of strings with input text prompts
         device = next(self.parameters()).device
-        max_text_len = 20 if self.dataset in ['humanml', 'kit'] else None  # Specific hardcoding for humanml dataset
+        max_text_len = 75 if self.dataset in ['humanml', 'kit'] else None  # Specific hardcoding for humanml dataset
         if max_text_len is not None:
             default_context_length = 77
             context_length = max_text_len + 2 # start_token + 20 + end_token
-            assert context_length < default_context_length
-            texts = clip.tokenize(raw_text, context_length=context_length, truncate=True).to(device) # [bs, context_length] # if n_tokens > context_length -> will truncate
-            # print('texts', texts.shape)
-            zero_pad = torch.zeros([texts.shape[0], default_context_length-context_length], dtype=texts.dtype, device=texts.device)
-            texts = torch.cat([texts, zero_pad], dim=1)
-            # print('texts after pad', texts.shape, texts)
+            assert context_length <= default_context_length
+            texts, texts_tokens = clip.tokenize(raw_text, context_length=context_length, truncate=True) # [bs, context_length] # if n_tokens > context_length -> will truncate
+            texts_lens_list = [len(text_token) for text_token in texts_tokens]
+            texts_tokens_padded=torch.zeros([texts.shape[0], default_context_length], dtype=texts.dtype, device=texts.device)
+            for i, text_tokens in enumerate(texts_tokens):
+                texts_tokens_padded[i, :texts_lens_list[i]] = torch.tensor(text_tokens)
+
         else:
             texts = clip.tokenize(raw_text, truncate=True).to(device) # [bs, context_length] # if n_tokens > 77 -> will truncate
-        return self.clip_model.encode_text(texts).float().unsqueeze(0)
+
+        texts = texts.to(device)
+        texts_tokens_padded = texts_tokens_padded.to(device)
+        
+        return self.clip_model.encode_text(texts, texts_lens_list=texts_lens_list).float(), texts_lens_list
     
     def bert_encode_text(self, raw_text):
         # enc_text = self.clip_model(raw_text)
@@ -210,14 +210,14 @@ class MDM(nn.Module):
             if 'text_embed' in y.keys():  # caching option
                 enc_text = y['text_embed']
             else:
-                enc_text = self.encode_text(y['text'])
+                enc_text, texts_len_list = self.encode_text(y['text'])  ## [bs, 4x7, 512]
             if type(enc_text) == tuple:
                 enc_text, text_mask = enc_text
                 if text_mask.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
                     text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
             text_emb = self.embed_text(self.mask_cond(enc_text, force_mask=force_mask))  # casting mask for the single-prompt-for-all case
             if self.emb_policy == 'add':
-                emb = text_emb + time_emb
+                emb = text_emb.permute(1,0,2).contiguous() + time_emb
             else:
                 emb = torch.cat([time_emb, text_emb], dim=0)
                 text_mask = torch.cat([torch.zeros_like(text_mask[:, 0:1]), text_mask], dim=1)

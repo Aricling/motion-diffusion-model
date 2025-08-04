@@ -101,7 +101,7 @@ class TrainLoop:
             self.device = torch.device(dist_util.dev())
 
         self.schedule_sampler_type = 'uniform'
-        self.schedule_sampler = create_named_schedule_sampler(self.schedule_sampler_type, diffusion)
+        self.schedule_sampler = create_named_schedule_sampler(self.schedule_sampler_type, diffusion)    ## 反正好像是针对diffuison的一种sample方式
         self.eval_wrapper, self.eval_data, self.eval_gt_data = None, None, None
         if args.dataset in ['kit', 'humanml'] and args.eval_during_training:
             mm_num_samples = 0  # mm is super slow hence we won't run it during training
@@ -211,7 +211,7 @@ class TrainLoop:
                 if not (not self.lr_anneal_steps or self.total_step() < self.lr_anneal_steps):
                     break
                 
-                self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency
+                self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency，这里应该是生成条件控制的代码，没有启用
                 motion = motion.to(self.device)
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
 
