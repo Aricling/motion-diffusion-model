@@ -7,7 +7,7 @@ from model.rotation2xyz import Rotation2xyz
 from model.BERT.BERT_encoder import load_bert
 from utils.misc import WeightedSum
 from utils.lora_util import apply_lora_attn_mlp, init_finetuned_clip_and_freeze
-from z_config import cfg
+import z_config
 
 
 class MDM(nn.Module):
@@ -176,7 +176,7 @@ class MDM(nn.Module):
         texts = texts.to(device)
         texts_tokens_padded = texts_tokens_padded.to(device)
         
-        if cfg.model.use_avg_clip_model:
+        if z_config.get_diy_config().model.use_avg_clip_model:
             return self.clip_model_avg.encode_text(texts, texts_lens_list=texts_lens_list).float(), texts_lens_list
         return self.clip_model.encode_text(texts, texts_lens_list=texts_lens_list).float(), texts_lens_list
     

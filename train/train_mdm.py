@@ -12,7 +12,7 @@ from train.training_loop import TrainLoop
 from data_loaders.get_data import get_dataset_loader
 from utils.model_util import create_model_and_diffusion
 from train.train_platforms import WandBPlatform, ClearmlPlatform, TensorboardPlatform, NoPlatform  # required for the eval operation
-from z_config import cfg
+import z_config
 import yaml
 from types import SimpleNamespace
 
@@ -40,6 +40,8 @@ def main():
     args_path = os.path.join(args.save_dir, 'args.json')
     with open(args_path, 'w') as fw:
         json.dump(vars(args), fw, indent=4, sort_keys=True)
+    z_config.init_diy_config()
+    cfg=z_config.get_diy_config()
     config_path = os.path.join(args.save_dir, 'config.yaml')
     with open(config_path, 'w') as f:
         cfg_dict = namespace_to_dict(cfg)

@@ -17,6 +17,8 @@ from train.train_platforms import ClearmlPlatform, TensorboardPlatform, NoPlatfo
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
+import z_config
+
 def evaluate_matching_score(eval_wrapper, motion_loaders, file):
     match_score_dict = OrderedDict({})
     R_precision_dict = OrderedDict({})
@@ -251,6 +253,9 @@ if __name__ == '__main__':
     log_name += f'_{args.eval_mode}'
     log_file = os.path.join(os.path.dirname(args.model_path), log_name + '.log')
     save_dir = os.path.dirname(log_file)  # has not been tested with WandB
+    diy_cfg_path = os.path.join(save_dir, "config.yaml")
+    print("using cfg path:{}".format(diy_cfg_path))
+    z_config.init_diy_config(diy_cfg_path)
 
     print(f'Will save to log file [{log_file}]')
 

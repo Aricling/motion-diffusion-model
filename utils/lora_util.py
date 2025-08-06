@@ -3,7 +3,7 @@ import os
 import torch.nn as nn
 from utils import dist_util
 import copy
-from z_config import cfg
+import z_config
 
 def apply_lora_attn_mlp(model, encoder_type="text", rank=16, lora_alpha=32, mlp=True, attn=True):
     if encoder_type == 'visual':
@@ -133,7 +133,8 @@ def load_clip_w_lora(model, state_dict, lora_dict):
     assert all("lora" or "text_projection" in k for k in missing_keys), f"Error: Not all missing keys are LoRA-related. Found keys without 'lora': { [k for k in missing_keys if 'lora' not in k] }"
     assert all("lora" not in k for k in missing_keys_lora), f"Missing keys contain LoRA layers: { [k for k in missing_keys_lora if 'lora' in k] }"
 
-def init_finetuned_clip_and_freeze(clip_model, clip_model_path=cfg.model.clip_model_path):
+def init_finetuned_clip_and_freeze(clip_model, clip_model_path=None):
+    clip_model_path=z_config.get_diy_config().model.clip_model_path
 
     old_weight = clip_model.token_embedding.weight
     new_vocab_size = old_weight.shape[0] + 3  # 假设新增3个token

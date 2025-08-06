@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-from z_config import cfg
+import z_config
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -344,7 +344,9 @@ class CLIP(nn.Module):
     def encode_image(self, image):
         return self.visual(image.type(self.dtype))
 
-    def encode_text(self, text, token_projection=True, texts_lens_list=None, return_sen_emb=cfg.model.clip_use_sen_emb):
+    def encode_text(self, text, token_projection=True, texts_lens_list=None, return_sen_emb=None):
+        return_sen_emb=z_config.get_diy_config().model.clip_use_sen_emb
+
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
         x = x + self.positional_embedding.type(self.dtype)
         x = x.permute(1, 0, 2)  # [n_ctx, batch_size, dim]
