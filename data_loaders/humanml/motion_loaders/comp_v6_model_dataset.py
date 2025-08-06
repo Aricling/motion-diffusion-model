@@ -210,7 +210,7 @@ class CompMDMGeneratedDataset(Dataset):
                         model_kwargs=model_kwargs,
                         skip_timesteps=0,  # 0 is the default value - i.e. don't skip any step
                         init_image=None,
-                        progress=False,
+                        progress=True,
                         dump_steps=None,
                         noise=None,
                         const_noise=False,

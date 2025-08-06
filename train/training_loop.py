@@ -81,8 +81,7 @@ class TrainLoop:
         if self.args.use_ema:
             self.opt = AdamW(
                 # with amp, we don't need to use the mp_trainer's master_params
-                (self.model.parameters()
-                 if self.use_fp16 else self.mp_trainer.master_params),
+                self.model.parameters(),
                 lr=self.lr,
                 weight_decay=self.weight_decay,
                 betas=(0.9, self.args.adam_beta2),
@@ -403,7 +402,7 @@ class TrainLoop:
             def del_clip(state_dict):
                 # Do not save CLIP weights
                 clip_weights = [
-                    e for e in state_dict.keys() if e.startswith('clip_model.')
+                    e for e in state_dict.keys() if e.startswith('clip_model')
                 ]
                 for e in clip_weights:
                     del state_dict[e]
@@ -411,8 +410,9 @@ class TrainLoop:
             if self.use_fp16:
                 state_dict = self.model.state_dict()
             else:
-                state_dict = self.mp_trainer.master_params_to_state_dict(
-                    self.mp_trainer.master_params)
+                # state_dict = self.mp_trainer.master_params_to_state_dict(
+                #     self.mp_trainer.master_params)
+                state_dict = self.model.state_dict()
             del_clip(state_dict)
 
             if self.args.use_ema:

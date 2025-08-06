@@ -268,7 +268,7 @@ if __name__ == '__main__':
         diversity_times = 300
         replication_times = 5  # about 3 Hrs
     elif args.eval_mode == 'wo_mm':
-        num_samples_limit = 1000
+        num_samples_limit = 3000
         run_mm = False
         mm_num_samples = 0
         mm_num_repeats = 0
@@ -324,7 +324,7 @@ if __name__ == '__main__':
         )
     }
 
-    eval_wrapper = EvaluatorMDMWrapper(args.dataset, dist_util.dev())
+    eval_wrapper = EvaluatorMDMWrapper(args.dataset, dist_util.dev())   ## 这个就是后面评估用的几个模型
     evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replication_times, 
                diversity_times, mm_num_times, run_mm=run_mm, eval_platform=eval_platform)
     eval_platform.close()

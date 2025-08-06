@@ -1,0 +1,5 @@
+# clip_model path
+model:
+  clip_model_path: save/finetune_clip_all__layers/model000450000.pt
+  clip_use_sen_emb: True
+  use_avg_clip_model: True

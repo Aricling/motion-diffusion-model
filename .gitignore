@@ -143,3 +143,4 @@ dataset/motion_emb_std.npy
 dataset/t2m_train.npy
 dataset/HumanML3D
 MotionBERT/
+dataset/t2m_test.npy

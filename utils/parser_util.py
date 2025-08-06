@@ -253,6 +253,8 @@ def add_evaluation_options(parser):
     group = parser.add_argument_group('eval')
     group.add_argument("--model_path", required=True, type=str,
                        help="Path to model####.pt file to be sampled.")
+    group.add_argument("--fted_clip_model_path", required=True, type=str, 
+                       help="Path to finetuned CLIP model path")
     group.add_argument("--eval_mode", default='wo_mm', choices=['wo_mm', 'mm_short', 'debug', 'full'], type=str,
                        help="wo_mm (t2m only) - 20 repetitions without multi-modality metric; "
                             "mm_short (t2m only) - 5 repetitions with multi-modality metric; "

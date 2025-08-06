@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
+from z_config import cfg
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -290,7 +291,7 @@ class CLIP(nn.Module):
         self.positional_embedding = nn.Parameter(torch.empty(self.context_length, transformer_width))
         self.ln_final = LayerNorm(transformer_width)
 
-        # self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
+        self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
         self.token_projection=nn.Linear(in_features=512, out_features=512)
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
@@ -343,7 +344,7 @@ class CLIP(nn.Module):
     def encode_image(self, image):
         return self.visual(image.type(self.dtype))
 
-    def encode_text(self, text, token_projection=True, texts_lens_list=None):
+    def encode_text(self, text, token_projection=True, texts_lens_list=None, return_sen_emb=cfg.model.clip_use_sen_emb):
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
         x = x + self.positional_embedding.type(self.dtype)
         x = x.permute(1, 0, 2)  # [n_ctx, batch_size, dim]
@@ -374,6 +375,11 @@ class CLIP(nn.Module):
             #     motion_indices.unsqueeze(-1).expand(-1, -1, dim),  # 索引 [batch_size, 28, dim]
             #     x_motion_tokens_proj  # 替换内容 [batch_size, 28, dim]
             # )
+            if return_sen_emb:
+                eos_token_id = 49407
+                eos_positions = (text == eos_token_id).float().argmax(dim=1)  # shape: [batch_size]
+                sen_emb = (x[torch.arange(x.shape[0]), eos_positions] @ self.text_projection).unsqueeze(1)
+                return torch.cat([sen_emb, x_motion_tokens_proj],dim=1)
 
         return x_motion_tokens_proj  # shape: [batch_size, n_ctx, dim]
 

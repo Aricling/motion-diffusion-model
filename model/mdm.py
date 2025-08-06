@@ -6,7 +6,8 @@ import clip
 from model.rotation2xyz import Rotation2xyz
 from model.BERT.BERT_encoder import load_bert
 from utils.misc import WeightedSum
-from utils.lora_util import apply_lora_attn_mlp, init_finetuned_clip
+from utils.lora_util import apply_lora_attn_mlp, init_finetuned_clip_and_freeze
+from z_config import cfg
 
 
 class MDM(nn.Module):
@@ -110,9 +111,9 @@ class MDM(nn.Module):
                 if self.text_encoder_type == "clip":
                     print('Loading CLIP...')
                     self.clip_version = clip_version
-                    self.clip_model = self.load_and_freeze_clip(clip_version)
+                    self.clip_model = self.load_ori_clip(clip_version)
                     self.clip_model = apply_lora_attn_mlp(self.clip_model, encoder_type='text', mlp=True, attn=True)
-                    self.clip_model, self.clip_model_avg = init_finetuned_clip(self.clip_model)
+                    self.clip_model, self.clip_model_avg = init_finetuned_clip_and_freeze(self.clip_model)
                     self.encode_text = self.clip_encode_text
                 elif self.text_encoder_type == 'bert':
                     assert self.arch == 'trans_dec'
@@ -140,7 +141,7 @@ class MDM(nn.Module):
     def parameters_wo_clip(self):
         return [p for name, p in self.named_parameters() if not name.startswith('clip_model.')]
 
-    def load_and_freeze_clip(self, clip_version):
+    def load_ori_clip(self, clip_version):
         clip_model, clip_preprocess = clip.load(clip_version, device='cpu',
                                                 jit=False)  # Must set jit=False for training
         return clip_model
@@ -175,6 +176,8 @@ class MDM(nn.Module):
         texts = texts.to(device)
         texts_tokens_padded = texts_tokens_padded.to(device)
         
+        if cfg.model.use_avg_clip_model:
+            return self.clip_model_avg.encode_text(texts, texts_lens_list=texts_lens_list).float(), texts_lens_list
         return self.clip_model.encode_text(texts, texts_lens_list=texts_lens_list).float(), texts_lens_list
     
     def bert_encode_text(self, raw_text):
