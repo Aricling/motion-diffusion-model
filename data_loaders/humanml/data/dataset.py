@@ -237,6 +237,7 @@ class Text2MotionDatasetV2(data.Dataset):
             for name in tqdm(id_list):
                 try:
                     motion = np.load(pjoin(opt.motion_dir, name + '.npy'))
+                    motion_263 = np.load(pjoin(opt.motion_dir.replace("joints", "joint_vecs"), name + '.npy'))
                     if (len(motion)) < min_motion_len or (len(motion) >= 200):
                         continue
                     text_data = []
@@ -260,12 +261,14 @@ class Text2MotionDatasetV2(data.Dataset):
                             else:
                                 try:
                                     n_motion = motion[int(f_tag*20) : int(to_tag*20)]
+                                    n_motion_263 = motion_263[int(f_tag*20) : int(to_tag*20)]
                                     if (len(n_motion)) < min_motion_len or (len(n_motion) >= 200):
                                         continue
                                     new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
                                     while new_name in data_dict:
                                         new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
                                     data_dict[new_name] = {'motion': n_motion,
+                                                           'motion_263': n_motion_263,
                                                            'length': len(n_motion),
                                                            'text':[text_dict]}
                                     new_name_list.append(new_name)
@@ -278,6 +281,7 @@ class Text2MotionDatasetV2(data.Dataset):
 
                     if flag:
                         data_dict[name] = {'motion': motion,
+                                           'motion_263': n_motion_263,
                                            'length': len(motion),
                                            'text': text_data}   ## 这里对应的可能是有很多个的text
                         new_name_list.append(name)

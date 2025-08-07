@@ -304,7 +304,6 @@ class TrainLoop:
             for motion, cond in tqdm(self.data):    ## [64, 263, 1, 196]
                 if not (not self.lr_anneal_steps or self.total_step() < self.lr_anneal_steps):
                     break
-                print(len(self.data.dataset))
                 MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'], name_list=cond['y']['db_key'])   ## 可视化了应该没什么问题，3D的直接用scale_range[1,1]，不用考虑2D，因为AMASS它也是这么做的
                 # MB_emb_normed_st_pooled=cond['y']['MB_emb'].to(dist_util.dev())
                 MB_emb=MB_emb.reshape(*MB_emb.shape[:2], -1)
