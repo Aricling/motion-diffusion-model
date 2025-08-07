@@ -17,6 +17,12 @@ v2: text token来通过self attn来注入, motion token通过cross attn来注入
 True代表解决了clip的参数没有fix住的问题
 
 ## eval代码
+## 这个跑不了，后面返回会报错
 python -m eval.eval_humanml \
-    --model_path /home/mengqing/usr/motion-diffusion-model/save/train_mdm_w_motion_token_gt/model000250000.pt \
-    --device 1
+    --model_path /home/mengqing/usr/motion-diffusion-model/save/train_mdm_w_motion_token_gt/model000500000.pt \
+    --device 0
+
+## 这个能跑
+python -m eval.eval_humanml \
+    --model_path /home/mengqing/usr/motion-diffusion-model/save/train_mdm_w_finetuned_clip_v1_True/model000550000.pt \
+    --device 0

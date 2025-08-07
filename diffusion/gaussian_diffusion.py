@@ -18,6 +18,7 @@ from diffusion.losses import normal_kl, discretized_gaussian_log_likelihood
 from data_loaders.humanml.scripts import motion_process
 from utils.loss_util import masked_l2, masked_goal_l2
 from data_loaders.humanml.scripts.motion_process import get_target_location
+import z_config
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps, scale_betas=1.):
     """
@@ -633,6 +634,8 @@ class GaussianDiffusion:
         if 'text' in model_kwargs['y'].keys():
             # encoding once instead of each iteration saves lots of time
             model_kwargs['y']['text_embed'], model_kwargs['y']['texts_len_list'] = model.encode_text(model_kwargs['y']['text'])
+            if z_config.get_diy_config().training.use_gt_MB_simplified_data:
+                model_kwargs['y']['text_embed'][:,1:,:]=model_kwargs['y']['motion_token_emb']
         
         for i, sample in enumerate(self.p_sample_loop_progressive(
             model,

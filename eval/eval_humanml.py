@@ -33,7 +33,10 @@ def evaluate_matching_score(eval_wrapper, motion_loaders, file):
         # print(motion_loader_name)
         with torch.no_grad():
             for idx, batch in enumerate(motion_loader):
-                word_embeddings, pos_one_hots, _, sent_lens, motions, m_lens, _ = batch
+                if len(batch)==8:
+                    word_embeddings, pos_one_hots, _, sent_lens, motions, m_lens, _, _ = batch
+                else:
+                    word_embeddings, pos_one_hots, _, sent_lens, motions, m_lens, _ = batch
                 text_embeddings, motion_embeddings = eval_wrapper.get_co_embeddings(
                     word_embs=word_embeddings,
                     pos_ohot=pos_one_hots,
@@ -78,7 +81,10 @@ def evaluate_fid(eval_wrapper, groundtruth_loader, activation_dict, file):
     print('========== Evaluating FID ==========')
     with torch.no_grad():
         for idx, batch in enumerate(groundtruth_loader):
-            _, _, _, sent_lens, motions, m_lens, _ = batch
+            if len(batch)==8:
+                _, _, _, sent_lens, motions, m_lens, _, _ = batch
+            else:
+                _, _, _, sent_lens, motions, m_lens, _ = batch
             motion_embeddings = eval_wrapper.get_motion_embeddings(
                 motions=motions,
                 m_lens=m_lens

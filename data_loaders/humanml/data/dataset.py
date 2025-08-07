@@ -322,7 +322,7 @@ class Text2MotionDatasetV2(data.Dataset):
         idx = self.pointer + item
         key = self.name_list[idx]
         data = self.data_dict[key]
-        motion, m_length, text_list = data['motion'], data['length'], data['text']
+        motion, m_length, text_list = data['motion_263'], data['length'], data['text']
         # Randomly select a caption
         text_data = random.choice(text_list)
         caption, tokens = text_data['caption'], text_data['tokens']
@@ -785,7 +785,7 @@ class HumanML3D(data.Dataset):
         opt.data_root = pjoin(abs_base_path, opt.data_root)
         opt.save_root = pjoin(abs_base_path, opt.save_root)
         opt.meta_dir = pjoin(abs_base_path, './dataset')
-        opt.use_cache = kwargs.get('use_cache', False)
+        opt.use_cache = kwargs.get('use_cache', True)
         opt.fixed_len = kwargs.get('fixed_len', 0)
         if opt.fixed_len > 0:
             opt.max_motion_length = opt.fixed_len
