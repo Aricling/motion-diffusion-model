@@ -214,6 +214,8 @@ class MDM(nn.Module):
                 enc_text = y['text_embed']
             else:
                 enc_text, texts_len_list = self.encode_text(y['text'])  ## [bs, 4x7, 512]
+                if z_config.get_diy_config().training.use_gt_MB_simplified_data:
+                    enc_text[:,1:,:] = y['motion_token_emb']
             if type(enc_text) == tuple:
                 enc_text, text_mask = enc_text
                 if text_mask.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case

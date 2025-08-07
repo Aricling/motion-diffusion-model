@@ -3,3 +3,9 @@ model:
   clip_model_path: save/finetune_clip_all__layers/model000450000.pt
   clip_use_sen_emb: True
   use_avg_clip_model: True
+
+training:
+  use_gt_MB_simplified_data: True
+
+data:
+  MB_simplified_data_path: /data/mengqing/HumanML3D_MB_rep_new

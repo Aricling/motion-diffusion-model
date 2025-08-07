@@ -60,6 +60,9 @@ def collate(batch):
 
     if 'key' in notnone_batches[0]:
         cond['y'].update({'db_key': [b['key'] for b in notnone_batches]})
+    
+    if 'motion_token_emb' in notnone_batches[0] and notnone_batches[0]['motion_token_emb'] is not None:
+        cond['y'].update({'motion_token_emb': collate_tensors([b['motion_token_emb'] for b in notnone_batches])})
 
     return motion, cond
 
@@ -74,7 +77,7 @@ def t2m_collate(batch, target_batch_size):
         'text': b[2], #b[0]['caption']
         'tokens': b[6],
         'lengths': b[5],
-        'key': b[7] if len(b) > 7 else None,
+        'motion_token_emb': torch.tensor(b[7]).float() if len(b) > 7 else None,
     } for b in full_batch]
     return collate(adapted_batch)
 

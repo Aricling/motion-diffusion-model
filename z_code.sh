@@ -1,13 +1,13 @@
 # 以微调的CLIP来训练MDM，启动代码
 python -m train.train_mdm \
-    --save_dir save/train_mdm_w_finetuned_clip_v1_True \
+    --save_dir save/train_mdm_w_motion_token_gt \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \
     --text_encoder_type clip \
     --mask_frames \
     --use_ema \
-    --device 2 \
+    --device 5 \
     --overwrite \
     --train_platform_type WandBPlatform
 
@@ -18,5 +18,5 @@ True代表解决了clip的参数没有fix住的问题
 
 ## eval代码
 python -m eval.eval_humanml \
-    --model_path /home/mengqing/usr/motion-diffusion-model/save/train_mdm_w_finetuned_clip_v1_True/model000450000.pt \
-    --device 7
+    --model_path /home/mengqing/usr/motion-diffusion-model/save/train_mdm_w_finetuned_clip_v0_True/model000600000.pt \
+    --device 2

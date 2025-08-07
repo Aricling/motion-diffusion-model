@@ -11,6 +11,7 @@ import spacy
 from torch.utils.data._utils.collate import default_collate
 from data_loaders.humanml.utils.word_vectorizer import WordVectorizer
 from data_loaders.humanml.utils.get_opt import get_opt
+import z_config
 
 # import spacy
 
@@ -215,6 +216,11 @@ class Text2MotionDatasetV2(data.Dataset):
         self.max_motion_length = opt.max_motion_length
         min_motion_len = 40 if self.opt.dataset_name =='t2m' else 24
 
+        self.cfg=z_config.get_diy_config()
+        self.use_gt_MB_simplified_data=self.cfg.training.use_gt_MB_simplified_data
+        if self.use_gt_MB_simplified_data:
+            self.MB_simplified_data_dir = self.cfg.data.MB_simplified_data_path
+
         data_dict = {}
         id_list = []
         with cs.open(split_file, 'r') as f:
@@ -346,6 +352,10 @@ class Text2MotionDatasetV2(data.Dataset):
         else:
             coin2 = 'single'
 
+        if self.use_gt_MB_simplified_data:
+            coin2 = 'single'
+            motion_token_emb=np.load(os.path.join(self.MB_simplified_data_dir, f"{key}.npy"))
+
         if coin2 == 'double':
             m_length = (m_length // self.opt.unit_length - 1) * self.opt.unit_length
         elif coin2 == 'single':
@@ -358,6 +368,8 @@ class Text2MotionDatasetV2(data.Dataset):
             m_length = self.opt.fixed_len
         
         idx = random.randint(0, len(motion) - m_length)
+        if self.use_gt_MB_simplified_data:
+            idx = 0
         if self.opt.disable_offset_aug:
             idx = random.randint(0, self.opt.unit_length)
         motion = motion[idx:idx+m_length]
@@ -373,8 +385,10 @@ class Text2MotionDatasetV2(data.Dataset):
         # print(tokens)
 
         length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
-
-        return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens)
+        if self.use_gt_MB_simplified_data:
+            return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), motion_token_emb
+        else:
+            return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens)
 
 
 '''For use of training baseline'''
