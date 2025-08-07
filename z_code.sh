@@ -18,5 +18,5 @@ True代表解决了clip的参数没有fix住的问题
 
 ## eval代码
 python -m eval.eval_humanml \
-    --model_path /home/mengqing/usr/motion-diffusion-model/save/train_mdm_w_finetuned_clip_v0_True/model000600000.pt \
-    --device 2
+    --model_path /home/mengqing/usr/motion-diffusion-model/save/train_mdm_w_motion_token_gt/model000250000.pt \
+    --device 1
