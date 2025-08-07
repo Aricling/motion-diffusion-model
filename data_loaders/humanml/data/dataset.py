@@ -267,6 +267,7 @@ class Text2MotionDatasetV2(data.Dataset):
                                     new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
                                     while new_name in data_dict:
                                         new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
+                                    assert len(n_motion)==len(n_motion_263)
                                     data_dict[new_name] = {'motion': n_motion,
                                                            'motion_263': n_motion_263,
                                                            'length': len(n_motion),
@@ -280,8 +281,9 @@ class Text2MotionDatasetV2(data.Dataset):
                                     # break
 
                     if flag:
+                        assert len(motion)==len(motion_263)
                         data_dict[name] = {'motion': motion,
-                                           'motion_263': n_motion_263,
+                                           'motion_263': motion_263,
                                            'length': len(motion),
                                            'text': text_data}   ## 这里对应的可能是有很多个的text
                         new_name_list.append(name)
