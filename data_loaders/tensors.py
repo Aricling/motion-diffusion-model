@@ -77,8 +77,8 @@ def t2m_collate(batch, target_batch_size):
         'text': b[2], #b[0]['caption']
         'tokens': b[6],
         'lengths': b[5],
-        'MB_emb': torch.tensor(b[7]).float(),
-        'key': b[8] if len(b) > 8 else None,
+        # 'MB_emb': torch.tensor(b[7]).float(),
+        'key': b[7] if len(b) > 7 else None,
     } for b in full_batch]
     return collate(adapted_batch)
 

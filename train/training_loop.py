@@ -304,17 +304,20 @@ class TrainLoop:
             for motion, cond in tqdm(self.data):    ## [64, 263, 1, 196]
                 if not (not self.lr_anneal_steps or self.total_step() < self.lr_anneal_steps):
                     break
-                
-                # MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'], name_list=cond['y']['db_key'])   ## 可视化了应该没什么问题，3D的直接用scale_range[1,1]，不用考虑2D，因为AMASS它也是这么做的
-                MB_emb_normed_st_pooled=cond['y']['MB_emb'].to(dist_util.dev())
-                # MB_emb=MB_emb.reshape(*MB_emb.shape[:2], -1)
-                # MB_emb_normed= ((MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / torch.tensor(self.motion_emb_std, device=MB_emb.device)).reshape(*MB_emb.shape[:2], 17, 512).contiguous()
-                # MB_emb_normed_pooled=MB_emb_normed[:, ::self.pooling_size, :]
-                # MB_emb_normed_st_pooled = self.st_pool(MB_emb_normed)
-                # MB_emb_normed_st_pooled = MB_emb_normed_st_pooled.reshape(MB_emb_normed_st_pooled.shape[0], -1, MB_emb_normed_st_pooled.shape[-1])
-                
+                print(len(self.data.dataset))
+                MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'], name_list=cond['y']['db_key'])   ## 可视化了应该没什么问题，3D的直接用scale_range[1,1]，不用考虑2D，因为AMASS它也是这么做的
+                # MB_emb_normed_st_pooled=cond['y']['MB_emb'].to(dist_util.dev())
+                MB_emb=MB_emb.reshape(*MB_emb.shape[:2], -1)
+                MB_emb_normed= ((MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / torch.tensor(self.motion_emb_std, device=MB_emb.device)).reshape(*MB_emb.shape[:2], 17, 512).contiguous()
+                MB_emb_normed_pooled=MB_emb_normed[:, ::self.pooling_size, :]
+                MB_emb_normed_st_pooled = self.st_pool(MB_emb_normed)
+                MB_emb_normed_st_pooled = MB_emb_normed_st_pooled.reshape(MB_emb_normed_st_pooled.shape[0], -1, MB_emb_normed_st_pooled.shape[-1])
+                for MB_emb_normed_st_pooled_sub, name in zip(MB_emb_normed_st_pooled, cond['y']['db_key']):
+                    save_dir = "/data/mengqing/HumanML3D_MB_rep_new"
+                    np.save(os.path.join(save_dir, f"{name}.npy"), MB_emb_normed_st_pooled_sub.detach().cpu().numpy())
                 # self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency,看了一下好像没有什么用
                 # motion = motion.to(self.device) ## 这个地方的motion确认过了都是没有问题的
+                    '''
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
 
                 with autocast("cuda"):
@@ -344,7 +347,7 @@ class TrainLoop:
                     # Run for a finite amount of time in integration tests.
                     if os.environ.get("DIFFUSION_TRAINING_TEST", "") and self.total_step() > 0:
                         return
-                self.step += 1
+                self.step += 1'''
             if not (not self.lr_anneal_steps or self.total_step() < self.lr_anneal_steps):
                 break
         # Save the last checkpoint if it wasn't already saved.

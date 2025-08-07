@@ -338,7 +338,7 @@ class Text2MotionDatasetV2(data.Dataset):
         key = self.name_list[idx]
         data = self.data_dict[key]
         motion, m_length, text_list = data['motion'], data['length'], data['text']
-        MB_emb = np.load(os.path.join(self.opt.MB_rep_root, f"{key}.npy"))
+        # MB_emb = np.load(os.path.join(self.opt.MB_rep_root, f"{key}.npy"))
         if self.multi_view:
             ## 随机选择视角
             R=random.choices(self.R_list, weights=self.R_weights, k=1)[0]
@@ -401,7 +401,8 @@ class Text2MotionDatasetV2(data.Dataset):
                 motion, np.zeros((self.max_motion_length-m_length, motion.shape[1]))
             ], axis=0)
 
-        return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), MB_emb, key
+        return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), key
+        # return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), MB_emb, key
 
 
 '''For use of training baseline'''
