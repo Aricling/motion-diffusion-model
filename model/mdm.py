@@ -74,30 +74,66 @@ class MDM(nn.Module):
             elif self.multi_encoder_type == 'split':
                self.embed_target_cond = EmbedTargetLocSplit(self.all_goal_joint_names, self.latent_dim, self.target_enc_layers)     
         
-        if self.arch == 'trans_enc':
-            print("TRANS_ENC init")
-            seqTransEncoderLayer = nn.TransformerEncoderLayer(d_model=self.latent_dim,
-                                                              nhead=self.num_heads,
-                                                              dim_feedforward=self.ff_size,
-                                                              dropout=self.dropout,
-                                                              activation=self.activation)
+        if z_config.get_diy_config().training.split_info_injection:
+            half_layers = self.num_layers // 2
 
-            self.seqTransEncoder = nn.TransformerEncoder(seqTransEncoderLayer,
-                                                         num_layers=self.num_layers)
-        elif self.arch == 'trans_dec':
-            print("TRANS_DEC init")
-            seqTransDecoderLayer = nn.TransformerDecoderLayer(d_model=self.latent_dim,
-                                                              nhead=self.num_heads,
-                                                              dim_feedforward=self.ff_size,
-                                                              dropout=self.dropout,
-                                                              activation=activation)
-            self.seqTransDecoder = nn.TransformerDecoder(seqTransDecoderLayer,
-                                                         num_layers=self.num_layers)
-        elif self.arch == 'gru':
-            print("GRU init")
-            self.gru = nn.GRU(self.latent_dim, self.latent_dim, num_layers=self.num_layers, batch_first=True)
+            print(f"Split mode enabled. Using half layers: {half_layers} for both encoder and decoder.")
+
+            # 初始化前半部分 encoder 层 (half_layers 层)
+            seqTransEncoderLayer = nn.TransformerEncoderLayer(
+                d_model=self.latent_dim,
+                nhead=self.num_heads,
+                dim_feedforward=self.ff_size,
+                dropout=self.dropout,
+                activation=self.activation
+            )
+            self.encoder_layers = nn.ModuleList([
+                seqTransEncoderLayer for _ in range(half_layers)
+            ])
+
+            seqTransDecoderLayer = nn.TransformerDecoderLayer(
+                d_model=self.latent_dim,
+                nhead=self.num_heads,
+                dim_feedforward=self.ff_size,
+                dropout=self.dropout,
+                activation=self.activation  # 注意你原来写的是 activation，这里保持一致，不过最好也用 self.activation
+            )
+            self.decoder_layers = nn.ModuleList([
+                seqTransDecoderLayer for _ in range(half_layers)
+            ])
+
+            # 不再初始化完整的 self.seqTransEncoder 或 self.seqTransDecoder
+            # 而是在 forward 中根据 version 手动控制 encoder 和 decoder layers 的执行顺序
+
+            # 标记当前为 split 模式
+            self.split_info_mode = True
+            self.split_version = z_config.get_diy_config().training.split_info_version
+
         else:
-            raise ValueError('Please choose correct architecture [trans_enc, trans_dec, gru]')
+            if self.arch == 'trans_enc':
+                print("TRANS_ENC init")
+                seqTransEncoderLayer = nn.TransformerEncoderLayer(d_model=self.latent_dim,
+                                                                nhead=self.num_heads,
+                                                                dim_feedforward=self.ff_size,
+                                                                dropout=self.dropout,
+                                                                activation=self.activation)
+
+                self.seqTransEncoder = nn.TransformerEncoder(seqTransEncoderLayer,
+                                                            num_layers=self.num_layers)
+            elif self.arch == 'trans_dec':
+                print("TRANS_DEC init")
+                seqTransDecoderLayer = nn.TransformerDecoderLayer(d_model=self.latent_dim,
+                                                                nhead=self.num_heads,
+                                                                dim_feedforward=self.ff_size,
+                                                                dropout=self.dropout,
+                                                                activation=activation)
+                self.seqTransDecoder = nn.TransformerDecoder(seqTransDecoderLayer,
+                                                            num_layers=self.num_layers)
+            elif self.arch == 'gru':
+                print("GRU init")
+                self.gru = nn.GRU(self.latent_dim, self.latent_dim, num_layers=self.num_layers, batch_first=True)
+            else:
+                raise ValueError('Please choose correct architecture [trans_enc, trans_dec, gru]')
 
         self.embed_timestep = TimestepEmbedder(self.latent_dim, self.sequence_pos_encoder)
 
@@ -246,41 +282,98 @@ class MDM(nn.Module):
         frames_mask = None
         is_valid_mask = y['mask'].shape[-1] > 1  # Don't use mask with the generate script
         if self.mask_frames and is_valid_mask:
-            frames_mask = torch.logical_not(y['mask'][..., :x.shape[0]].squeeze(1).squeeze(1)).to(device=x.device)
-            if self.emb_trans_dec or self.arch == 'trans_enc':
-                step_mask = torch.zeros((bs, 1), dtype=torch.bool, device=x.device)
+            frames_mask = torch.logical_not(y['mask'][..., :x.shape[0]].squeeze(1).squeeze(1)).to(device=x.device)  ## 这里看着其实就是一个普通的取反操作
+            if getattr(self, 'split_info_mode', False):
+                step_mask = torch.zeros((bs, 1), dtype=torch.bool, device=x.device) ## 这里是因为encoder中会在前面加上一维度，所以连带着mask也需要加上
+                frames_mask_enc = torch.cat([step_mask, frames_mask], dim=1)
+                frames_mask_dec = frames_mask
+            elif self.emb_trans_dec or self.arch == 'trans_enc':
+                step_mask = torch.zeros((bs, 1), dtype=torch.bool, device=x.device) ## 这里是因为encoder中会在前面加上一维度，所以连带着mask也需要加上
                 frames_mask = torch.cat([step_mask, frames_mask], dim=1)
 
-        if self.arch == 'trans_enc':
-            # adding the timestep emb
-            xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
+        if getattr(self, 'split_info_mode', False):
+            cls_emb=emb[:1]
+            motion_emb=emb[1:]
+            xseq = torch.cat((cls_emb, x), axis=0)  # [seqlen+1, bs, d], emb之中是包含了文本和去噪步数的信息
             xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
-            output = self.seqTransEncoder(xseq, src_key_padding_mask=frames_mask)[1:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
+            cls_emb=xseq[:1]    ## 这个是文本的
+            m_seq=xseq[1:]   ## 这个是那196维的motion seq
+            
+            version = self.split_version
 
-        elif self.arch == 'trans_dec':
-            if self.emb_trans_dec:
-                xseq = torch.cat((time_emb, x), axis=0)
-            else:
+            if version == 0:
+                output = torch.cat((cls_emb, m_seq), axis=0)
+                for layer in self.encoder_layers:
+                    output = layer(output, src_key_padding_mask=frames_mask_enc)
+                tgt = output[1:]  # 你可以根据需求修改这里的 tgt
+                output = tgt
+                for layer in self.decoder_layers:
+                    output = layer(output, memory=motion_emb, tgt_key_padding_mask=frames_mask_dec)
+            
+            elif version == 1:
+                output = m_seq
+                for layer in self.decoder_layers:
+                    output = layer(output, memory=motion_emb, tgt_key_padding_mask=frames_mask_dec)
+
+                tgt = torch.cat((cls_emb, output), axis=0)
+                for layer in self.encoder_layers:
+                    tgt = layer(tgt, src_key_padding_mask=frames_mask_enc)
+                output = tgt[1:]
+
+            elif version == 2:
+                # 交叉执行：一层 encoder，一层 decoder，一层 encoder，...
+                encoder_layers = list(self.encoder_layers)
+                decoder_layers = list(self.decoder_layers)
+                layer_iter = []
+
+                # 交替添加 encoder 和 decoder 层的迭代器
+                for e_layer, d_layer in zip(encoder_layers, decoder_layers):
+                    layer_iter.append(e_layer)
+                    layer_iter.append(d_layer)
+                
+                output=m_seq
+                output = torch.cat((cls_emb, output), axis=0)
+
+                for layer in layer_iter:
+                    if isinstance(layer, nn.TransformerEncoderLayer):
+                        output = layer(output, src_key_padding_mask=frames_mask_enc)
+                    elif isinstance(layer, nn.TransformerDecoderLayer):
+                        output = layer(output, memory=motion_emb, tgt_key_padding_mask=frames_mask_enc) ## 这里没办法只能直接借用enc的mask了
+                    else:
+                        raise ValueError(f"Unexpected layer type: {type(layer)}")
+                output = output[1:]
+
+        else:
+            if self.arch == 'trans_enc':
+                # adding the timestep emb
+                xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
+                xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
+                output = self.seqTransEncoder(xseq, src_key_padding_mask=frames_mask)[1:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
+
+            elif self.arch == 'trans_dec':
+                if self.emb_trans_dec:
+                    xseq = torch.cat((time_emb, x), axis=0)
+                else:
+                    xseq = x
+                xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
+
+                if self.text_encoder_type == 'clip':
+                    output = self.seqTransDecoder(tgt=xseq, memory=emb, tgt_key_padding_mask=frames_mask)
+                elif self.text_encoder_type == 'bert':
+                    output = self.seqTransDecoder(tgt=xseq, memory=emb, memory_key_padding_mask=text_mask, tgt_key_padding_mask=frames_mask)  # Rotem's bug fix
+                else:
+                    raise ValueError()
+
+                if self.emb_trans_dec:
+                    output = output[1:] # [seqlen, bs, d]
+
+            elif self.arch == 'gru':
                 xseq = x
-            xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
-
-            if self.text_encoder_type == 'clip':
-                output = self.seqTransDecoder(tgt=xseq, memory=emb, tgt_key_padding_mask=frames_mask)
-            elif self.text_encoder_type == 'bert':
-                output = self.seqTransDecoder(tgt=xseq, memory=emb, memory_key_padding_mask=text_mask, tgt_key_padding_mask=frames_mask)  # Rotem's bug fix
-            else:
-                raise ValueError()
-
-            if self.emb_trans_dec:
-                output = output[1:] # [seqlen, bs, d]
-
-        elif self.arch == 'gru':
-            xseq = x
-            xseq = self.sequence_pos_encoder(xseq)  # [seqlen, bs, d]
-            output, _ = self.gru(xseq)
+                xseq = self.sequence_pos_encoder(xseq)  # [seqlen, bs, d]
+                output, _ = self.gru(xseq)
 
         # Extract completed suffix
-        if self.is_prefix_comp:
+        if self.is_prefix_comp: ## 这边又不走，就不用管了
             output = output[self.context_len:]
             y['mask'] = y['mask'][..., self.context_len:]
         
