@@ -38,6 +38,7 @@ from typing import Tuple, Dict
 from torch.amp import GradScaler, autocast
 from utils.skeleton_pool import STPool
 import loratorch as lora
+import random
 
 
 # For ImageNet experiments, this was a good default value.
@@ -296,24 +297,98 @@ class TrainLoop:
             
             return rep_inp.detach(), None
 
+    def get_rotation_matrix_y(self, theta_deg):
+        theta = np.radians(theta_deg)  # 角度转弧度
+        cos, sin = np.cos(theta), np.sin(theta)
+        R = np.array([
+            [cos,  0, sin],
+            [0,    1,  0],
+            [-sin, 0, cos]
+        ], dtype=np.float32)  # 用 float32 保持一致
+        return R
+    
     def run_loop(self):
         scaler = GradScaler()
         print('train steps:', self.num_steps)
         for epoch in range(self.num_epochs):
             print(f'Starting epoch {epoch}')
-            for motion, cond in tqdm(self.data):    ## [64, 263, 1, 196]
-                if not (not self.lr_anneal_steps or self.total_step() < self.lr_anneal_steps):
+            use_multiview=True
+            save_dir = "/data/mengqing/HumanML3D_MB_rep_new"
+
+            # --- 处理数据批次 ---
+            for motion, cond in tqdm(self.data): # [64, 263, 1, 196]
+                # 学习率预热/衰减检查
+                if self.lr_anneal_steps and self.total_step() >= self.lr_anneal_steps:
                     break
-                MB_emb, _=self.process_motion_to_representation(motion, length_list=cond['y']['lengths'], name_list=cond['y']['db_key'])   ## 可视化了应该没什么问题，3D的直接用scale_range[1,1]，不用考虑2D，因为AMASS它也是这么做的
-                # MB_emb_normed_st_pooled=cond['y']['MB_emb'].to(dist_util.dev())
-                MB_emb=MB_emb.reshape(*MB_emb.shape[:2], -1)
-                MB_emb_normed= ((MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / torch.tensor(self.motion_emb_std, device=MB_emb.device)).reshape(*MB_emb.shape[:2], 17, 512).contiguous()
-                MB_emb_normed_pooled=MB_emb_normed[:, ::self.pooling_size, :]
-                MB_emb_normed_st_pooled = self.st_pool(MB_emb_normed)
-                MB_emb_normed_st_pooled = MB_emb_normed_st_pooled.reshape(MB_emb_normed_st_pooled.shape[0], -1, MB_emb_normed_st_pooled.shape[-1])
-                for MB_emb_normed_st_pooled_sub, name in zip(MB_emb_normed_st_pooled, cond['y']['db_key']):
-                    save_dir = "/data/mengqing/HumanML3D_MB_rep_new"
-                    np.save(os.path.join(save_dir, f"{name}.npy"), MB_emb_normed_st_pooled_sub.detach().cpu().numpy())
+
+                # --- 多视角处理逻辑 ---
+                if use_multiview:
+                    view_angles = [-60, -30, 0, 30, 60]
+                    R_list = [self.get_rotation_matrix_y(angle) for angle in view_angles]
+                    save_dir = "/data/mengqing/HumanML3D_MB_rep_new_multiview" # 为多视角指定不同目录或添加后缀
+                    os.makedirs(save_dir, exist_ok=True)
+
+                    # 逐个处理 batch 中的每个样本
+                    for b_idx, (motion_sample, name) in enumerate(zip(motion, cond['y']['db_key'])):
+                        all_view_embeddings = []
+
+                        # 遍历每个视角
+                        for angle_idx, angle in enumerate(view_angles):
+                            R = R_list[angle_idx]
+                            # 从原始 motion_sample 旋转，不污染原始数据
+                            if isinstance(R, np.ndarray):
+                                R = torch.from_numpy(R).float()
+                            motion_rotated = ((motion_sample.view(22, 3, 196)
+                                .permute(0, 2, 1) @ R.T)
+                                .permute(0, 2, 1).reshape(66, 1, 196)).unsqueeze(0)
+
+                            # 提取表示
+                            MB_emb, _ = self.process_motion_to_representation(
+                                motion_rotated,
+                                length_list=[cond['y']['lengths'][b_idx]],  # list of one length
+                                name_list=[name]
+                            )
+
+                            # 归一化
+                            MB_emb = MB_emb.reshape(*MB_emb.shape[:2], -1)
+                            MB_emb_normed = ((MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) /
+                                            torch.tensor(self.motion_emb_std, device=MB_emb.device))
+                            MB_emb_normed = MB_emb_normed.reshape(*MB_emb.shape[:2], 17, 512).contiguous()
+
+                            # 时空池化
+                            MB_emb_normed_st_pooled = self.st_pool(MB_emb_normed)  # [1, T', 17, 512]
+                            MB_emb_normed_st_pooled = MB_emb_normed_st_pooled.reshape(
+                                MB_emb_normed_st_pooled.shape[0], -1, MB_emb_normed_st_pooled.shape[-1]
+                            )  # [1, T'', C]
+
+                            # 取出并保存
+                            emb_sub = MB_emb_normed_st_pooled[0]  # [T'', C]
+                            # all_view_embeddings.append(emb_sub.detach().cpu().numpy()) # 如果需要收集所有视角
+
+                            # 文件名包含角度
+                            save_path = os.path.join(save_dir, f"{name}_view_{angle:+04d}.npy")
+                            np.save(save_path, emb_sub.detach().cpu().numpy()) # 保存到CPU numpy数组
+                            # print(f"Saved multiview embedding: {save_path}")
+                # --- 单视角处理逻辑 ---
+                else:
+                    # 原始单视角处理流程
+                    os.makedirs(save_dir, exist_ok=True)
+                    
+                    MB_emb, _ = self.process_motion_to_representation(motion, length_list=cond['y']['lengths'], name_list=cond['y']['db_key'])
+                    
+                    MB_emb = MB_emb.reshape(*MB_emb.shape[:2], -1)
+                    MB_emb_normed = ((MB_emb - torch.tensor(self.motion_emb_mean, device=MB_emb.device)) / 
+                                    torch.tensor(self.motion_emb_std, device=MB_emb.device)).reshape(*MB_emb.shape[:2], 17, 512).contiguous()
+                    
+                    # MB_emb_normed_pooled = MB_emb_normed[:, ::self.pooling_size, :] # 这行代码在原始中似乎未被使用
+                    
+                    MB_emb_normed_st_pooled = self.st_pool(MB_emb_normed)
+                    MB_emb_normed_st_pooled = MB_emb_normed_st_pooled.reshape(MB_emb_normed_st_pooled.shape[0], -1, MB_emb_normed_st_pooled.shape[-1])
+                    
+                    for MB_emb_normed_st_pooled_sub, name in zip(MB_emb_normed_st_pooled, cond['y']['db_key']):
+                        save_path = os.path.join(save_dir, f"{name}.npy")
+                        np.save(save_path, MB_emb_normed_st_pooled_sub.detach().cpu().numpy())
+                        print(f"Saved single-view embedding: {save_path}")
                 # self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency,看了一下好像没有什么用
                 # motion = motion.to(self.device) ## 这个地方的motion确认过了都是没有问题的
                     '''

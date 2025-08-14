@@ -1,6 +1,6 @@
-## 其实是finetune clip训练的启动代码
+## 其实是finetune clip训练的启动代码,在这里被改成了存储数据的方法
 python -m train.train_mdm_w_motionbert \
-    --save_dir save/finetune_clip_all_ffn_layers \
+    --save_dir save/test \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \
@@ -9,7 +9,7 @@ python -m train.train_mdm_w_motionbert \
     --use_ema \
     --device 0 \
     --overwrite \
-    --train_platform_type WandBPlatform \
+    # --train_platform_type WandBPlatform \
     --pooling 1 \
     --motionbert_config /home/mengqing/usr/motion-diffusion-model/MotionBERT/configs/pose3d/MB_ft_h36m_global_lite.yaml \
     --evaluate_motionbert /home/mengqing/usr/motion-diffusion-model/MotionBERT/checkpoint/pose3d/FT_MB_lite_MB_ft_h36m_global_lite/best_epoch.bin
