@@ -1,13 +1,13 @@
-## 其实是finetune clip训练的启动代码
+## 其实是finetune clip训练的启动代码,默认都是finetune CLIP所有的线性层
 python -m train.train_mdm_w_motionbert \
-    --save_dir save/finetune_clip_all_ffn_layers \
+    --save_dir save/finetune_clip_all_layers_try_1 \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \
     --text_encoder_type clip \
     --mask_frames \
     --use_ema \
-    --device 0 \
+    --device 3 \
     --overwrite \
     --train_platform_type WandBPlatform \
     --pooling 1 \

@@ -11,6 +11,7 @@ import spacy
 from torch.utils.data._utils.collate import default_collate
 from data_loaders.humanml.utils.word_vectorizer import WordVectorizer
 from data_loaders.humanml.utils.get_opt import get_opt
+import z_config
 
 def collate_fn(batch):
     batch.sort(key=lambda x: x[3], reverse=True)
@@ -298,12 +299,9 @@ class Text2MotionDatasetV2(data.Dataset):
         self.data_dict = data_dict
         self.name_list = name_list
         self.reset_max_len(self.max_length)
-        self.multi_view = multi_view
-        print(f"activate multi_view: {self.multi_view}")
-        if multi_view:
-            view_angles=[-60, -30, 0, 30, 60]
-            self.R_list=[self.get_rotation_matrix_y(angle) for angle in view_angles]
-            self.R_weights=[0.1, 0.15, 0.5, 0.15, 0.1]
+        if z_config.get_diy_config().training.use_multiview:
+            self.opt.MB_rep_root="/data/mengqing/HumanML3D_MB_rep_new_multiview"
+            self.angle_list=[-60,-30,0,30,60]
 
     def reset_max_len(self, length):
         assert length <= self.max_motion_length
@@ -338,12 +336,16 @@ class Text2MotionDatasetV2(data.Dataset):
         key = self.name_list[idx]
         data = self.data_dict[key]
         motion, m_length, text_list = data['motion'], data['length'], data['text']
-        MB_emb = np.load(os.path.join(self.opt.MB_rep_root, f"{key}.npy"))
-        if self.multi_view:
-            ## 随机选择视角
-            R=random.choices(self.R_list, weights=self.R_weights, k=1)[0]
-            ## 应用旋转
-            motion = motion @ R.T
+        
+        if z_config.get_diy_config().training.use_multiview:
+            emb_60_rev=np.load(os.path.join(self.opt.MB_rep_root, f"{key}_view_-060.npy"))
+            emb_30_rev=np.load(os.path.join(self.opt.MB_rep_root, f"{key}_view_-030.npy"))
+            emb_00=np.load(os.path.join(self.opt.MB_rep_root, f"{key}_view_+000.npy"))
+            emb_30=np.load(os.path.join(self.opt.MB_rep_root, f"{key}_view_+030.npy"))
+            emb_60=np.load(os.path.join(self.opt.MB_rep_root, f"{key}_view_+060.npy"))
+            MB_emb=(emb_60_rev+emb_30_rev+emb_00+emb_30+emb_60)/5
+        else:
+            MB_emb = np.load(os.path.join(self.opt.MB_rep_root, f"{key}.npy"))
 
         # Randomly select a caption
         text_data = random.choice(text_list)
@@ -800,7 +802,7 @@ class HumanML3D(data.Dataset):
         opt.data_root = pjoin(abs_base_path, opt.data_root)
         opt.save_root = pjoin(abs_base_path, opt.save_root)
         opt.meta_dir = pjoin(abs_base_path, './dataset')
-        opt.use_cache = kwargs.get('use_cache', False)
+        opt.use_cache = kwargs.get('use_cache', True)
         opt.fixed_len = kwargs.get('fixed_len', 0)
         if opt.fixed_len > 0:
             opt.max_motion_length = opt.fixed_len

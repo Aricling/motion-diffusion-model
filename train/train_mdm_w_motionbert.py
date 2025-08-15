@@ -15,7 +15,17 @@ from utils.model_util import create_model_and_diffusion
 from train.train_platforms import WandBPlatform, ClearmlPlatform, TensorboardPlatform, NoPlatform  # required for the eval operation
 from MotionBERT.lib.utils.tools import *
 from MotionBERT.lib.utils.learning import *
+import z_config
+from types import SimpleNamespace
 
+def namespace_to_dict(ns):
+    if isinstance(ns, SimpleNamespace):
+        return {k: namespace_to_dict(v) for k, v in vars(ns).items()}
+    elif isinstance(ns, dict):
+        return {k: namespace_to_dict(v) for k, v in ns.items()}
+    else:
+        return ns
+    
 def main():
     args = train_args()
     fixseed(args.seed)
@@ -32,6 +42,12 @@ def main():
     args_path = os.path.join(args.save_dir, 'args.json')
     with open(args_path, 'w') as fw:
         json.dump(vars(args), fw, indent=4, sort_keys=True)
+    z_config.init_diy_config()
+    cfg=z_config.get_diy_config()
+    config_path = os.path.join(args.save_dir, 'config.yaml')
+    with open(config_path, 'w') as f:
+        cfg_dict = namespace_to_dict(cfg)
+        yaml.safe_dump(cfg_dict, f, sort_keys=False)
 
     dist_util.setup_dist(args.device)
 
