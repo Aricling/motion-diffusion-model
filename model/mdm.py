@@ -137,6 +137,30 @@ class MDM(nn.Module):
 
         self.embed_timestep = TimestepEmbedder(self.latent_dim, self.sequence_pos_encoder)
 
+        if z_config.get_diy_config().model.use_contronet_injection:
+            print("======initialize controlnet=======")
+            self.input_motion_token_layer=nn.Linear(self.latent_dim, self.latent_dim)
+            self.c_input_process = InputProcess(self.data_rep, self.input_feats+self.gru_emb_dim, self.latent_dim)
+            self.c_sequence_pos_encoder = PositionalEncoding(self.latent_dim, self.dropout)
+            c_seqTransEncoderLayer = nn.TransformerEncoderLayer(d_model=self.latent_dim,
+                                                                nhead=self.num_heads,
+                                                                dim_feedforward=self.ff_size,
+                                                                dropout=self.dropout,
+                                                                activation=self.activation)
+
+            self.c_seqTransEncoder = nn.TransformerEncoder(c_seqTransEncoderLayer,
+                                                        num_layers=self.num_layers)
+            
+            self.zero_convs = self.zero_module(nn.ModuleList([nn.Linear(self.latent_dim, self.latent_dim) for _ in range(self.num_layers)]))
+            
+            self.c_embed_timestep = TimestepEmbedder(self.latent_dim, self.sequence_pos_encoder)
+
+            self.c_joint_integration_layer = nn.Linear(in_features=7, out_features=1)
+
+            if self.cond_mode != 'no_cond':
+                if 'text' in self.cond_mode:
+                    self.c_embed_text = nn.Linear(self.clip_dim, self.latent_dim)
+
         if self.cond_mode != 'no_cond':
             if 'text' in self.cond_mode:
                 # We support CLIP encoder and DistilBERT
@@ -174,6 +198,14 @@ class MDM(nn.Module):
 
         self.rot2xyz = Rotation2xyz(device='cpu', dataset=self.dataset)
 
+    def zero_module(self, module):
+        """
+        Zero out the parameters of a module and return it.
+        """
+        for p in module.parameters():
+            nn.init.zeros_(p)
+        return module
+    
     def parameters_wo_clip(self):
         return [p for name, p in self.named_parameters() if not name.startswith('clip_model.')]
 
@@ -225,11 +257,68 @@ class MDM(nn.Module):
         mask = ~mask  # mask: True means no token there, we invert since the meaning of mask for transformer is inverted  https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
         return enc_text, mask
 
+    def cmdm_forward(self, x, timesteps, y=None):
+        bs, njoints, nfeats, nframes = x.shape
+        time_emb = self.c_embed_timestep(timesteps)  # [1, bs, d]
+        force_mask = y.get('uncond', False)
+        if 'text' in self.cond_mode:
+            if 'text_embed' in y.keys():  # caching option
+                enc_text = y['text_embed']
+            else:
+                enc_text, texts_len_list = self.encode_text(y['text'])  ## [bs, 4x7, 512]
+                if z_config.get_diy_config().training.use_gt_MB_simplified_data:
+                    enc_text[:,1:,:] = y['motion_token_emb']
+            text_emb=self.c_embed_text(self.mask_cond(enc_text, force_mask=force_mask))
+            text_cls_emb = text_emb[:,:1,:]
+            motion_token_emb=text_emb[:,1:,:]
+            if self.emb_policy == 'add':
+                emb = text_cls_emb.permute(1,0,2).contiguous() + time_emb
+
+            x=self.c_input_process(x)
+            ## 这里得处理motion_token_emb来匹配x的维度
+            motion_token_emb=motion_token_emb.reshape(motion_token_emb.shape[0], 4, 7, -1).transpose(-2, -1)  # [64, 4, 512, 7]
+            # self.c_joint_integration_layer: Linear(7 -> 1)
+            motion_token_emb = self.c_joint_integration_layer(motion_token_emb).squeeze(-1)  # [64, 4, 512, 1]
+            motion_token_emb = motion_token_emb.repeat_interleave(repeats=49, dim=1)  # [64, 4*49, 512]
+
+            x += motion_token_emb.transpose(0,1)
+
+            frames_mask = None
+            is_valid_mask = y['mask'].shape[-1] > 1  # Don't use mask with the generate script
+            if self.mask_frames and is_valid_mask:
+                frames_mask = torch.logical_not(y['mask'][..., :x.shape[0]].squeeze(1).squeeze(1)).to(device=x.device)  ## 这里看着其实就是一个普通的取反操作
+                if getattr(self, 'split_info_mode', False):
+                    step_mask = torch.zeros((bs, 1), dtype=torch.bool, device=x.device) ## 这里是因为encoder中会在前面加上一维度，所以连带着mask也需要加上
+                    frames_mask_enc = torch.cat([step_mask, frames_mask], dim=1)
+                    frames_mask_dec = frames_mask
+                elif self.emb_trans_dec or self.arch == 'trans_enc':
+                    step_mask = torch.zeros((bs, 1), dtype=torch.bool, device=x.device) ## 这里是因为encoder中会在前面加上一维度，所以连带着mask也需要加上
+                    frames_mask = torch.cat([step_mask, frames_mask], dim=1)
+
+            if self.arch == 'trans_enc':
+                # adding the timestep emb
+                xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
+                xseq = self.c_sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
+                control = []
+
+                for i, layer in enumerate(self.c_seqTransEncoder.layers):
+                    xseq = layer(xseq, src_key_padding_mask=frames_mask)
+                    control.append(self.zero_convs[i](xseq))
+
+        return control
+
+
+
+
     def forward(self, x, timesteps, y=None):
         """
         x: [batch_size, njoints, nfeats, max_frames], denoted x_t in the paper
         timesteps: [batch_size] (int)
         """
+        if z_config.get_diy_config().model.use_contronet_injection==True:
+            assert self.arch=="trans_enc","ERROR: When using controlnet, MDM must be encoder"
+            control = self.cmdm_forward(x, timesteps, y)
+
         bs, njoints, nfeats, nframes = x.shape
         time_emb = self.embed_timestep(timesteps)  # [1, bs, d]
 
@@ -252,7 +341,7 @@ class MDM(nn.Module):
                 enc_text, texts_len_list = self.encode_text(y['text'])  ## [bs, 4x7, 512]
                 if z_config.get_diy_config().training.use_gt_MB_simplified_data:
                     enc_text[:,1:,:] = y['motion_token_emb']
-            if type(enc_text) == tuple:
+            if type(enc_text) == tuple: ## 不会跑
                 enc_text, text_mask = enc_text
                 if text_mask.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
                     text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
@@ -262,10 +351,10 @@ class MDM(nn.Module):
             else:
                 emb = torch.cat([time_emb, text_emb], dim=0)
                 text_mask = torch.cat([torch.zeros_like(text_mask[:, 0:1]), text_mask], dim=1)
-        if 'action' in self.cond_mode:
+        if 'action' in self.cond_mode:  ## 不会跑
             action_emb = self.embed_action(y['action'])
             emb = time_emb + self.mask_cond(action_emb, force_mask=force_mask)
-        if self.cond_mode == 'no_cond': 
+        if self.cond_mode == 'no_cond':    ## 不会跑
             # unconstrained
             emb = time_emb
 
@@ -288,8 +377,16 @@ class MDM(nn.Module):
                 frames_mask_enc = torch.cat([step_mask, frames_mask], dim=1)
                 frames_mask_dec = frames_mask
             elif self.emb_trans_dec or self.arch == 'trans_enc':
-                step_mask = torch.zeros((bs, 1), dtype=torch.bool, device=x.device) ## 这里是因为encoder中会在前面加上一维度，所以连带着mask也需要加上
-                frames_mask = torch.cat([step_mask, frames_mask], dim=1)
+                if z_config.get_diy_config().model.use_contronet_injection:
+                    step_mask = torch.zeros((bs, 1), dtype=torch.bool, device=x.device) ## 这里是因为encoder中会在前面加上一维度，所以连带着mask也需要加上
+                    frames_mask = torch.cat([step_mask, frames_mask], dim=1)
+                else:
+                    if z_config.get_diy_config().model.clip_use_sen_emb:
+                        step_mask = torch.zeros((bs, 29), dtype=torch.bool, device=x.device) ## 这里是因为encoder中会在前面加上一维度，所以连带着mask也需要加上
+                        frames_mask = torch.cat([step_mask, frames_mask], dim=1)
+                    else:
+                        step_mask = torch.zeros((bs, 28), dtype=torch.bool, device=x.device) ## 这里是因为encoder中会在前面加上一维度，所以连带着mask也需要加上
+                        frames_mask = torch.cat([step_mask, frames_mask], dim=1)
 
         if getattr(self, 'split_info_mode', False):
             cls_emb=emb[:1]
@@ -346,9 +443,17 @@ class MDM(nn.Module):
         else:
             if self.arch == 'trans_enc':
                 # adding the timestep emb
-                xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
-                xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
-                output = self.seqTransEncoder(xseq, src_key_padding_mask=frames_mask)[1:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
+                if z_config.get_diy_config().model.use_contronet_injection:
+                    xseq = torch.cat((emb[:1], x), axis=0)
+                    xseq = self.sequence_pos_encoder(xseq)
+                    for i, layer in enumerate(self.seqTransEncoder.layers):
+                        xseq=layer(xseq, src_key_padding_mask=frames_mask)
+                        xseq=xseq+control[i]
+                    output=xseq[1:]
+                else:
+                    xseq = torch.cat((emb, x), axis=0)  # [seqlen+1, bs, d]
+                    xseq = self.sequence_pos_encoder(xseq)  # [seqlen+1, bs, d]
+                    output = self.seqTransEncoder(xseq, src_key_padding_mask=frames_mask)[-196:]  # , src_key_padding_mask=~maskseq)  # [seqlen, bs, d]
 
             elif self.arch == 'trans_dec':
                 if self.emb_trans_dec:

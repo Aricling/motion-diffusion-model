@@ -632,7 +632,7 @@ class GaussianDiffusion:
             dump = []
 
         if 'text' in model_kwargs['y'].keys():
-            # encoding once instead of each iteration saves lots of time
+            # encoding once instead of each iteration saves lots of time, 但是其实就是针对num_repeats这个参数来制定的，如果其只repeat 1次，就没有什么用
             model_kwargs['y']['text_embed'], model_kwargs['y']['texts_len_list'] = model.encode_text(model_kwargs['y']['text'])
             if z_config.get_diy_config().training.use_gt_MB_simplified_data:
                 model_kwargs['y']['text_embed'][:,1:,:]=model_kwargs['y']['motion_token_emb']

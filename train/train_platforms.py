@@ -68,7 +68,8 @@ class WandBPlatform(TrainPlatform):
             id=self.name,  # in order to send continued runs to the same record
             resume='allow',  # in order to send continued runs to the same record
             save_code=True,
-            config=config)  # config can also be sent via report_args()
+            config=config,   # config can also be sent via report_args()
+            )
 
     def report_scalar(self, name, value, iteration, group_name=None):
         self.wandb.log({name: value}, step=iteration)

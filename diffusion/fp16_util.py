@@ -173,18 +173,19 @@ class MixedPrecisionTrainer:
     def zero_grad(self):
         zero_grad(self.model_params)
 
-    def backward(self, loss: th.Tensor):
+    def backward(self, loss: th.Tensor, scaler):
         if self.use_fp16:
             loss_scale = 2 ** self.lg_loss_scale
             (loss * loss_scale).backward()
         else:
-            loss.backward()
+            # loss.backward()
+            scaler.scale(loss).backward()
 
-    def optimize(self, opt: th.optim.Optimizer):
+    def optimize(self, opt: th.optim.Optimizer, scaler):
         if self.use_fp16:
             return self._optimize_fp16(opt)
         else:
-            return self._optimize_normal(opt)
+            return self._optimize_normal(opt, scaler)
 
     def _optimize_fp16(self, opt: th.optim.Optimizer):
         logger.logkv_mean("lg_loss_scale", self.lg_loss_scale)
@@ -206,11 +207,12 @@ class MixedPrecisionTrainer:
         self.lg_loss_scale += self.fp16_scale_growth
         return True
 
-    def _optimize_normal(self, opt: th.optim.Optimizer):
+    def _optimize_normal(self, opt: th.optim.Optimizer, scaler):
         grad_norm, param_norm = self._compute_norms()
         logger.logkv_mean("grad_norm", grad_norm)
         logger.logkv_mean("param_norm", param_norm)
-        opt.step()
+        # opt.step()
+        scaler.step(opt)
         return True
 
     def _compute_norms(self, grad_scale=1.0):

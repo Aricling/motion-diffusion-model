@@ -27,6 +27,8 @@ from utils.model_util import load_model_wo_clip
 from data_loaders.humanml.scripts.motion_process import get_target_location, sample_goal, get_allowed_joint_options
 from utils.sampler_util import ClassifierFreeSampleModel
 
+from torch.amp import autocast, GradScaler
+
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -67,6 +69,8 @@ class TrainLoop:
         self.num_epochs = self.num_steps // len(self.data) + 1
 
         self.sync_cuda = torch.cuda.is_available()
+
+        self.scaler = GradScaler("cuda")
 
         self._load_and_sync_parameters()
         self.mp_trainer = MixedPrecisionTrainer(
@@ -289,7 +293,8 @@ class TrainLoop:
 
     def run_step(self, batch, cond):
         self.forward_backward(batch, cond)
-        self.mp_trainer.optimize(self.opt)
+        self.mp_trainer.optimize(self.opt, self.scaler)
+        self.scaler.update()
         self.update_average_model()
         self._anneal_lr()
         self.log_step()
@@ -328,7 +333,8 @@ class TrainLoop:
             )
 
             if last_batch or not self.use_ddp:
-                losses = compute_losses()
+                with autocast("cuda"):
+                    losses = compute_losses()
             else:
                 with self.ddp_model.no_sync():
                     losses = compute_losses()
@@ -342,7 +348,7 @@ class TrainLoop:
             log_loss_dict(
                 self.diffusion, t, {k: v * weights for k, v in losses.items()}
             )
-            self.mp_trainer.backward(loss)
+            self.mp_trainer.backward(loss, self.scaler)
 
     def _anneal_lr(self):
         if not self.lr_anneal_steps:

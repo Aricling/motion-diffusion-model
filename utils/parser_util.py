@@ -160,7 +160,7 @@ def add_training_options(parser):
                        help="If True, will run evaluation during training.")
     group.add_argument("--eval_rep_times", default=3, type=int,
                        help="Number of repetitions for evaluation loop during training.")
-    group.add_argument("--eval_num_samples", default=1_000, type=int,
+    group.add_argument("--eval_num_samples", default=None, type=int,
                        help="If -1, will use all samples in the specified split.")
     group.add_argument("--log_interval", default=1_000, type=int,
                        help="Log losses each N steps")

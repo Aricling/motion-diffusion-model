@@ -1,14 +1,18 @@
 model:
-  # clip_model_path: save/finetune_clip_all__layers/model000450000.pt ## 这个全finetune的是loss最小的，就先用这个
-  clip_model_path: save/finetune_clip_use_multiview/model000450000.pt ## 这个全finetune的是loss最小的，就先用这个
-  clip_use_sen_emb: True  ## 这个加了发现是很有用的，之后就用这个
+  clip_model_path: save/finetune_clip_all__layers/model000450000.pt ## 这个全finetune的是loss最小的，就先用这个
+  # clip_model_path: save/finetune_clip_use_multiview/model000450000.pt ## 这个是multiview的权重
+  clip_use_sen_emb: True  ## 这个加了发现是很有用的，之后就用这个True
   use_avg_clip_model: True
+  use_contronet_injection: false ## 这个置为True时，目前代码中arch一定得是encoder，decoder就不支持，也没有必要用controlnet注入
+
 
 training:
-  use_gt_MB_simplified_data: False  ## 这个是是否直接使用gt的motion token来跑
+  use_gt_MB_simplified_data: false  ## 这个是是否直接使用gt的motion token来跑
   use_multiview_training: False ## 现在是直接使用multiview trained CLIP，这个参数好像就没什么用了
   split_info_injection: False ## 如果这个为False，下面的那个split_info_version参数就不会被用到
   split_info_version: 2
 
 data:
   MB_simplified_data_path: /data/mengqing/HumanML3D_MB_rep_new  ## 这个参数和上面的额use_gt_MB_simplified_data有关系，为False则不会使用
+  Temperal_further_pooling: True
+  Joint_further_pooling: false
