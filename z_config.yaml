@@ -14,5 +14,5 @@ training:
 
 data:
   MB_simplified_data_path: /data/mengqing/HumanML3D_MB_rep_new  ## 这个参数和上面的额use_gt_MB_simplified_data有关系，为False则不会使用
-  Temperal_further_pooling: True
-  Joint_further_pooling: false
+  Temperal_further_pooling: false
+  Joint_further_pooling: true

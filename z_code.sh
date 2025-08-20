@@ -1,10 +1,10 @@
 ## 训练代码
 # 以微调的CLIP来训练MDM，启动代码，并且加上了在训练的时候验证
 python -m train.train_mdm \
-    --save_dir save/use_controlnet_to_inject_motion_tokens \
+    --save_dir save/train_mdm_further_pooling_joint \
     --dataset humanml \
     --diffusion_steps 50 \
-    --arch trans_enc \
+    --arch trans_dec \
     --text_encoder_type clip \
     --mask_frames \
     --use_ema \

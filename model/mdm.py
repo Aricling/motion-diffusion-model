@@ -338,9 +338,26 @@ class MDM(nn.Module):
             if 'text_embed' in y.keys():  # caching option
                 enc_text = y['text_embed']
             else:
-                enc_text, texts_len_list = self.encode_text(y['text'])  ## [bs, 4x7, 512]
+                enc_text, texts_len_list = self.encode_text(y['text'])  ## [bs, 4x7, 512],如果使用cls_token第二维就是29
                 if z_config.get_diy_config().training.use_gt_MB_simplified_data:
                     enc_text[:,1:,:] = y['motion_token_emb']
+                
+                ## 是否进一步pooling的对比实验
+                if any([z_config.get_diy_config().data.Temperal_further_pooling, z_config.get_diy_config().data.Joint_further_pooling]):
+                    if z_config.get_diy_config().data.Temperal_further_pooling and z_config.get_diy_config().data.Joint_further_pooling:
+                        motion_token_emb=enc_text[:, -28:, :].reshape(enc_text.shape[0], 4, 7, -1)
+                        motion_token_emb = motion_token_emb.mean(dim=1)  # [B, 7, D] -> 池化时间维度 (4->1)
+                        motion_token_emb = motion_token_emb.mean(dim=1).unsqueeze(1)  # [B, D] -> 池化关节点维度 (7->1)
+                        # 此时 shape: [B, 1, D]
+                    elif z_config.get_diy_config().data.Temperal_further_pooling and (not z_config.get_diy_config().data.Joint_further_pooling):
+                        motion_token_emb=enc_text[:, -28:, :].reshape(enc_text.shape[0], 4, 7, -1)
+                        motion_token_emb = motion_token_emb.mean(dim=1)  # [B, 7, D] -> 时间维度池化 (4->1)
+                        # 此时 shape: [B, 7, D]
+                    elif (not z_config.get_diy_config().data.Temperal_further_pooling) and z_config.get_diy_config().data.Joint_further_pooling:
+                        motion_token_emb=enc_text[:, -28:, :].reshape(enc_text.shape[0], 4, 7, -1)
+                        motion_token_emb = motion_token_emb.mean(dim=2)  # [B, 4, D] -> 关节点维度池化 (7->1)
+                        # 此时 shape: [B, 4, D]
+                    enc_text = torch.cat((enc_text[:,:1,:], motion_token_emb), dim=1)
             if type(enc_text) == tuple: ## 不会跑
                 enc_text, text_mask = enc_text
                 if text_mask.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
@@ -376,6 +393,7 @@ class MDM(nn.Module):
                 step_mask = torch.zeros((bs, 1), dtype=torch.bool, device=x.device) ## 这里是因为encoder中会在前面加上一维度，所以连带着mask也需要加上
                 frames_mask_enc = torch.cat([step_mask, frames_mask], dim=1)
                 frames_mask_dec = frames_mask
+            ## 我看起来这里其实主要是针对tran_enc
             elif self.emb_trans_dec or self.arch == 'trans_enc':
                 if z_config.get_diy_config().model.use_contronet_injection:
                     step_mask = torch.zeros((bs, 1), dtype=torch.bool, device=x.device) ## 这里是因为encoder中会在前面加上一维度，所以连带着mask也需要加上
