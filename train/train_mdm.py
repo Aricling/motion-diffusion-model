@@ -43,9 +43,13 @@ def main():
     z_config.init_diy_config()
     cfg=z_config.get_diy_config()
     config_path = os.path.join(args.save_dir, 'config.yaml')
-    with open(config_path, 'w') as f:
-        cfg_dict = namespace_to_dict(cfg)
-        yaml.safe_dump(cfg_dict, f, sort_keys=False)
+    if os.path.exists(config_path) and not cfg.overwrite_config:
+        raise ValueError(f"Config file already exists at {config_path} and overwrite is not enabled.")
+    else:
+        with open(config_path, 'w') as f:
+            cfg_dict=namespace_to_dict(cfg)
+            yaml.safe_dump(cfg_dict, f, sort_keys=False)
+
 
     dist_util.setup_dist(args.device)
 

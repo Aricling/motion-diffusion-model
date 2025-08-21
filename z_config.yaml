@@ -3,7 +3,9 @@ model:
   # clip_model_path: save/finetune_clip_use_multiview/model000450000.pt ## 这个是multiview的权重
   clip_use_sen_emb: True  ## 这个加了发现是很有用的，之后就用这个True
   use_avg_clip_model: True
-  use_contronet_injection: false ## 这个置为True时，目前代码中arch一定得是encoder，decoder就不支持，也没有必要用controlnet注入
+  use_contronet_injection: True ## 这个置为True时，目前代码中arch一定得是encoder，decoder就不支持，也没有必要用controlnet注入
+  # MDM_model_file: mdm_add_embed_motion
+  MDM_model_file: mdm
 
 
 training:
@@ -15,4 +17,6 @@ training:
 data:
   MB_simplified_data_path: /data/mengqing/HumanML3D_MB_rep_new  ## 这个参数和上面的额use_gt_MB_simplified_data有关系，为False则不会使用
   Temperal_further_pooling: false
-  Joint_further_pooling: true
+  Joint_further_pooling: false
+
+overwrite_config: true  ## 一般情况下默认为False，只有resume training的时候才会变成True

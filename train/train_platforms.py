@@ -79,7 +79,7 @@ class WandBPlatform(TrainPlatform):
         self.wandb.log({series: [self.wandb.Video(file, format='mp4', fps=20) for file in files]}, step=iteration)
 
     def report_args(self, args, name):
-        self.wandb.config.update(args)  #, allow_val_change=True)  # use allow_val_change ONLY if you want to change existing args (e.g., overwrite)
+        self.wandb.config.update(args) #, allow_val_change=True)  # use allow_val_change ONLY if you want to change existing args (e.g., overwrite)
 
     def watch_model(self, *args, **kwargs):
         self.wandb.watch(args, kwargs)

@@ -1,9 +1,10 @@
 import torch
-from model.mdm import MDM
 from diffusion import gaussian_diffusion as gd
 from diffusion.respace import SpacedDiffusion, space_timesteps
 from utils.parser_util import get_cond_mode
 from data_loaders.humanml_utils import HML_EE_JOINT_NAMES
+import importlib
+import z_config
 
 def load_model_wo_clip(model, state_dict):
     # assert (state_dict['sequence_pos_encoder.pe'][:model.sequence_pos_encoder.pe.shape[0]] == model.sequence_pos_encoder.pe).all()  # TEST
@@ -16,7 +17,23 @@ def load_model_wo_clip(model, state_dict):
 
 
 def create_model_and_diffusion(args, data):
+    try:
+        model_module_name = z_config.get_diy_config().model.MDM_model_file
+    except (AttributeError, KeyError):
+        model_module_name = None
+    # 如果配置不存在或为空，使用默认模块
+    if not model_module_name:
+        model_module_name = 'mdm'  # 默认使用 model.mdm
+    module_path = f"model.{model_module_name}"
+    try:
+        # 动态导入模块
+        module = importlib.import_module(module_path)
+    except ImportError as e:
+        raise ImportError(f"无法导入模型模块 '{module_path}'. "
+                          f"请检查是否存在 model/{model_module_name}.py 文件。错误: {e}")
+    MDM=getattr(module, 'MDM')
     model = MDM(**get_model_args(args, data))
+
     diffusion = create_gaussian_diffusion(args)
     return model, diffusion
 
