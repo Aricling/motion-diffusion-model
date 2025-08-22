@@ -37,8 +37,8 @@ python -m train.train_mdm \
 ## eval代码
 ## 这个跑不了，后面返回会报错，gt指的是说明后面28个token都是使用的gt的
 python -m eval.eval_humanml \
-    --model_path /home/mengqing/usr/motion-diffusion-model/save/use_controlnet_to_inject_motion_tokens/model000200000.pt \
-    --device 7
+    --model_path /home/mengqing/usr/motion-diffusion-model/save/train_mdm_w_finetuned_clip_v1_True/model000200000.pt \
+    --device 2
 
 ## 这个能跑,v1指的是以cross attn来进行信息注入的
 python -m eval.eval_humanml \
