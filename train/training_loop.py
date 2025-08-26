@@ -28,6 +28,7 @@ from data_loaders.humanml.scripts.motion_process import get_target_location, sam
 from utils.sampler_util import ClassifierFreeSampleModel
 
 from torch.amp import autocast, GradScaler
+import z_config
 
 
 # For ImageNet experiments, this was a good default value.
@@ -351,12 +352,29 @@ class TrainLoop:
             self.mp_trainer.backward(loss, self.scaler)
 
     def _anneal_lr(self):
-        if not self.lr_anneal_steps:
-            return
-        frac_done = self.total_step() / self.lr_anneal_steps
-        lr = self.lr * (1 - frac_done)
-        for param_group in self.opt.param_groups:
-            param_group["lr"] = lr
+        # 获取控制开关
+        use_contronet_injection = z_config.get_diy_config().model.use_contronet_injection
+        
+        # 如果开关关闭，或者没有设置 lr_anneal_steps，使用原始逻辑（从0步开始线性衰减）
+        if not use_contronet_injection or not self.lr_anneal_steps:
+            # --- 原始逻辑：从第0步开始线性衰减 ---
+            if not self.lr_anneal_steps:
+                return
+            frac_done = self.total_step() / self.lr_anneal_steps
+            lr = self.lr * (1 - frac_done)
+            for param_group in self.opt.param_groups:
+                param_group["lr"] = lr
+            return  # 原始逻辑执行完毕，返回
+        
+        # --- 新增逻辑：仅当 use_contronet_injection 为 True 时执行 ---
+        current_step = self.total_step()
+        
+        # 如果当前步数小于200,000，保持初始学习率 self.lr 不变
+        if current_step < 200000:
+            lr = self.lr  # 保持初始学习率
+        else:
+            # 当前步数 >= 200,000，将学习率设置为固定的 5e-5
+            lr = 5e-5
 
     def log_step(self):
         logger.logkv("step", self.total_step())

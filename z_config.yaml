@@ -19,4 +19,4 @@ data:
   Temperal_further_pooling: false
   Joint_further_pooling: false
 
-overwrite_config: true  ## 一般情况下默认为False，只有resume training的时候才会变成True
+overwrite_config: False  ## 一般情况下默认为False，只有resume training的时候才会变成True
