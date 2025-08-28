@@ -6,7 +6,8 @@ from os.path import join as pjoin
 from tqdm import tqdm
 from utils import dist_util
 from utils.sampler_util import AutoRegressiveSampler
-
+import os
+from collections import defaultdict
 
 def build_models(opt):
     if opt.text_enc_mod == 'bigru':
@@ -181,80 +182,78 @@ class CompMDMGeneratedDataset(Dataset):
         model.eval()
 
 
+        loss_stats = defaultdict(list)
+
         with torch.no_grad():
             for i, (motion, model_kwargs) in tqdm(enumerate(dataloader)):
 
                 if num_samples_limit is not None and len(generated_motion) >= num_samples_limit:
                     break
 
-                model_kwargs['y'] = {key: val.to(dist_util.dev()) if torch.is_tensor(val) else val for key, val in model_kwargs['y'].items()}
+                # 数据移至设备
+                model_kwargs['y'] = {
+                    key: val.to(dist_util.dev()) if torch.is_tensor(val) else val 
+                    for key, val in model_kwargs['y'].items()
+                }
                 motion = motion.to(dist_util.dev())
 
                 tokens = [t.split('_') for t in model_kwargs['y']['tokens']]
 
-                # add CFG scale to batch
-                if scale != 1.:
-                    model_kwargs['y']['scale'] = torch.ones(motion.shape[0],
-                                                            device=dist_util.dev()) * scale
+                # 添加 CFG scale
+                if scale != 1.0:
+                    model_kwargs['y']['scale'] = torch.ones(motion.shape[0], device=dist_util.dev()) * scale
 
                 mm_num_now = len(mm_generated_motions) // dataloader.batch_size
                 is_mm = i in mm_idxs
                 repeat_times = mm_num_repeats if is_mm else 1
                 mm_motions = []
-                for t in range(repeat_times):
 
-                    sample = sample_fn(
+                # 多次重复生成（如用于 MM 评估）
+                for t in range(repeat_times):
+                    terms = sample_fn(
                         model,
                         motion.shape,
                         clip_denoised=clip_denoised,
                         model_kwargs=model_kwargs,
-                        skip_timesteps=0,  # 0 is the default value - i.e. don't skip any step
+                        skip_timesteps=0,
                         init_image=None,
                         progress=False,
                         dump_steps=None,
                         noise=None,
                         const_noise=False,
-                        # when experimenting guidance_scale we want to nutrileze the effect of noise on generation
                     )
 
-                    if 'prefix' in model_kwargs['y'].keys():
-                        model_kwargs['y']['lengths'] = model_kwargs['y']['orig_lengths']
+                    # ✅ 收集当前 batch 的 loss
+                    for loss_name in ['loss_clip', 'loss_motion_token']:  # 你关心的 loss 项
+                        if loss_name in terms:
+                            # 如果 loss 是 tensor，转为 scalar
+                            loss_value = terms[loss_name].item() if torch.is_tensor(terms[loss_name]) else terms[loss_name]
+                            loss_stats[loss_name].append(loss_value)
 
-                    if t == 0:
-                        sub_dicts = [{
-                            'motion': sample[bs_i].squeeze().permute(1, 0).cpu().numpy(),
-                            'length': model_kwargs['y']['lengths'][bs_i].cpu().numpy(),
-                            'caption': model_kwargs['y']['text'][bs_i],
-                            'tokens': tokens[bs_i],
-                            # Fixed cap_len calculation, changed from len(tokens[bs_i])
-                            # Lead to improved R-precision and Multimodal Dist.
-                            # issue: https://github.com/GuyTevet/motion-diffusion-model/issues/182
-                            'cap_len': tokens[bs_i].index('eos/OTHER') + 1,
-                            } for bs_i in range(dataloader.batch_size)]
-                        generated_motion += sub_dicts
+                # --- 文件写入：当前 batch 的 loss ---
+                save_dir = os.path.dirname(args.model_path)
+                file_name = os.path.basename(args.model_path)
+                log_file_path = pjoin(save_dir, "eval_"+file_name.replace(".pt", ".txt"))
 
-                    if is_mm:
-                        for bs_i in range(dataloader.batch_size):
-                            mm_motion = sample[bs_i].squeeze().permute(1, 0).cpu().numpy()
-                            if self.dataset.mode == 'eval':
-                                mm_motion = self.dataset.t2m_dataset.inv_transform(mm_motion)
-                                mm_motion = (mm_motion - self.dataset.mean_for_eval) / self.dataset.std_for_eval  # according to T2M norms
+                os.makedirs(save_dir, exist_ok=True)  # 确保目录存在
 
-                            mm_motions.append({'motion': mm_motion,
-                                               'length': model_kwargs['y']['lengths'][bs_i].cpu().numpy(),
-                                               })
-                if is_mm:
-                    mm_generated_motions += [{
-                                    'caption': model_kwargs['y']['text'][bs_i],
-                                    'tokens': tokens[bs_i],
-                                    'cap_len': len(tokens[bs_i]),
-                                    'mm_motions': mm_motions[bs_i::dataloader.batch_size],  # collect all 10 repeats from the (32*10) generated motions
-                                    } for bs_i in range(dataloader.batch_size)]
+                with open(log_file_path, "a") as f:
+                    # 写当前 batch 的各项 loss
+                    for key, value in terms.items():
+                        val = value.item() if torch.is_tensor(value) else value
+                        f.write(f"{key}: {val:.6f}\t")  # 保留6位小数
+                    f.write("\n")  # 换行
 
+            # === 循环结束后：计算并写入平均 loss ===
+            with open(log_file_path, "a") as f:
+                f.write("\n" + "="*50 + "\n")
+                f.write("AVERAGE LOSSES:\n")
+                for loss_name, loss_values in loss_stats.items():
+                    avg_loss = sum(loss_values) / len(loss_values)
+                    f.write(f"AVG_{loss_name}: {avg_loss:.6f}\n")
+                f.write("="*50 + "\n")
 
-        self.generated_motion = generated_motion
-        self.mm_generated_motion = mm_generated_motions
-        self.w_vectorizer = dataloader.dataset.w_vectorizer
+                    
 
 
     def __len__(self):

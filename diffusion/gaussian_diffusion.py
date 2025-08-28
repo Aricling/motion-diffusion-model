@@ -634,30 +634,11 @@ class GaussianDiffusion:
 
         if 'text' in model_kwargs['y'].keys():
             # encoding once instead of each iteration saves lots of time
-            model_kwargs['y']['text_embed'] = model.encode_text(model_kwargs['y']['text'])
+            # model_kwargs['y']['text_embed'] = model.encode_text(model_kwargs['y']['text'])
+            model_output, targets_texts, texts_len_list = model.encode_text(model_kwargs['y']['text'])  ## targets_texts是原本的CLIP
+        terms = self.clip_finetune_l2_loss(model_output, targets_texts, model_kwargs['y']['MB_emb'], texts_len_list, motion_lens_list=model_kwargs['y']['lengths'])
+        return terms
         
-        for i, sample in enumerate(self.p_sample_loop_progressive(
-            model,
-            shape,
-            noise=noise,
-            clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn,
-            cond_fn=cond_fn,
-            model_kwargs=model_kwargs,
-            device=device,
-            progress=progress,
-            skip_timesteps=skip_timesteps,
-            init_image=init_image,
-            randomize_class=randomize_class,
-            cond_fn_with_grad=cond_fn_with_grad,
-            const_noise=const_noise,
-        )):
-            if dump_steps is not None and i in dump_steps:
-                dump.append(deepcopy(sample["sample"]))
-            final = sample
-        if dump_steps is not None:
-            return dump
-        return final["sample"]
 
     def p_sample_loop_progressive(
         self,

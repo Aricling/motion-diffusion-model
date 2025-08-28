@@ -17,6 +17,8 @@ from train.train_platforms import ClearmlPlatform, TensorboardPlatform, NoPlatfo
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
+import z_config
+
 def evaluate_matching_score(eval_wrapper, motion_loaders, file):
     match_score_dict = OrderedDict({})
     R_precision_dict = OrderedDict({})
@@ -153,6 +155,7 @@ def evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replicati
                 motion_loaders[motion_loader_name] = motion_loader
                 mm_motion_loaders[motion_loader_name] = mm_motion_loader
 
+            '''
             print(f'==================== Replication {replication} ====================')
             print(f'==================== Replication {replication} ====================', file=f, flush=True)
             print(f'Time: {datetime.now()}')
@@ -237,6 +240,7 @@ def evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replicati
                     eval_platform.report_scalar(name=k, value=v, iteration=1, group_name='Eval')
         
         return mean_dict
+        '''
 
 
 if __name__ == '__main__':
@@ -251,6 +255,10 @@ if __name__ == '__main__':
     log_name += f'_{args.eval_mode}'
     log_file = os.path.join(os.path.dirname(args.model_path), log_name + '.log')
     save_dir = os.path.dirname(log_file)  # has not been tested with WandB
+
+    print("initialize config...")
+    z_config.init_diy_config()
+    cfg=z_config.get_diy_config()
 
     print(f'Will save to log file [{log_file}]')
 
@@ -291,7 +299,8 @@ if __name__ == '__main__':
     logger.configure()
 
     logger.log("creating data loader...")
-    split = 'test'
+    # split = 'test'
+    split = 'train'
     gt_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split=split, hml_mode='gt')
     # gen_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split=split, hml_mode='eval')
     # added new features + support for prefix completion:
