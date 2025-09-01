@@ -39,6 +39,7 @@ from torch.amp import GradScaler, autocast
 from utils.skeleton_pool import STPool
 import loratorch as lora
 import random
+import z_config
 
 
 # For ImageNet experiments, this was a good default value.
@@ -287,7 +288,7 @@ class TrainLoop:
                 with torch.inference_mode():
                     motion_2d_scaled_i = motion_2d_i_scaled.unsqueeze(0)    ## [seq_len, 17, 3] -> [1, seq_len, 17, 3]
                     motion_emb = self.MB_backbone.get_representation(motion_2d_scaled_i)    ## 应该保存的是它
-                    padded_motion_emb = torch.zeros(1, 196, 17, 512, device=motion_emb.device)
+                    padded_motion_emb = torch.zeros(1, micro.shape[1], 17, 512, device=motion_emb.device)
                     padded_motion_emb[:, :motion_emb.shape[1], :, :] = motion_emb
                     motion_emb_list.append(padded_motion_emb)
             rep = torch.cat(motion_emb_list)  # [bs, seq_len, 17, 512]
@@ -310,13 +311,16 @@ class TrainLoop:
     def run_loop(self):
         scaler = GradScaler()
         print('train steps:', self.num_steps)
+        self.num_epochs=1
         for epoch in range(self.num_epochs):
             print(f'Starting epoch {epoch}')
-            use_multiview=True
+            use_multiview=z_config.get_diy_config().use_multiview
             save_dir = "/data/mengqing/HumanML3D_MB_rep_new"
+            if z_config.get_diy_config().process_original_MB_data:
+                save_dir = "/data/mengqing/HumanML3D_MB_rep"
 
             # --- 处理数据批次 ---
-            for motion, cond in tqdm(self.data): # [64, 263, 1, 196]
+            for motion, cond in tqdm(self.data): # torch.Size([64, 3, 1, 22, 199])
                 # 学习率预热/衰减检查
                 if self.lr_anneal_steps and self.total_step() >= self.lr_anneal_steps:
                     break
@@ -382,13 +386,19 @@ class TrainLoop:
                     
                     # MB_emb_normed_pooled = MB_emb_normed[:, ::self.pooling_size, :] # 这行代码在原始中似乎未被使用
                     
-                    MB_emb_normed_st_pooled = self.st_pool(MB_emb_normed)
-                    MB_emb_normed_st_pooled = MB_emb_normed_st_pooled.reshape(MB_emb_normed_st_pooled.shape[0], -1, MB_emb_normed_st_pooled.shape[-1])
-                    
-                    for MB_emb_normed_st_pooled_sub, name in zip(MB_emb_normed_st_pooled, cond['y']['db_key']):
-                        save_path = os.path.join(save_dir, f"{name}.npy")
-                        np.save(save_path, MB_emb_normed_st_pooled_sub.detach().cpu().numpy())
-                        print(f"Saved single-view embedding: {save_path}")
+                    if z_config.get_diy_config().process_original_MB_data:
+                        for MB_emb_normed_sub, name, length in zip(MB_emb_normed, cond['y']['db_key'], cond['y']['lengths']):
+                            save_path = os.path.join(save_dir, f"{name}.npy")
+                            np.save(save_path, MB_emb_normed_sub[:length].detach().cpu().numpy())
+                            print(f"Saved single-view embedding: {save_path}")
+                    else:
+                        MB_emb_normed_st_pooled = self.st_pool(MB_emb_normed)
+                        MB_emb_normed_st_pooled = MB_emb_normed_st_pooled.reshape(MB_emb_normed_st_pooled.shape[0], -1, MB_emb_normed_st_pooled.shape[-1])
+                        
+                        for MB_emb_normed_st_pooled_sub, name in zip(MB_emb_normed_st_pooled, cond['y']['db_key']):
+                            save_path = os.path.join(save_dir, f"{name}.npy")
+                            np.save(save_path, MB_emb_normed_st_pooled_sub.detach().cpu().numpy())
+                            print(f"Saved single-view embedding: {save_path}")
                 # self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency,看了一下好像没有什么用
                 # motion = motion.to(self.device) ## 这个地方的motion确认过了都是没有问题的
                     '''
@@ -425,9 +435,9 @@ class TrainLoop:
             if not (not self.lr_anneal_steps or self.total_step() < self.lr_anneal_steps):
                 break
         # Save the last checkpoint if it wasn't already saved.
-        if (self.total_step() - 1) % self.save_interval != 0:
-            self.save()
-            self.evaluate()
+        # if (self.total_step() - 1) % self.save_interval != 0:
+        #     self.save()
+        #     self.evaluate()
 
     def evaluate(self):
         if not self.args.eval_during_training:

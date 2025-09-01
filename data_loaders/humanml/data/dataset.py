@@ -12,6 +12,8 @@ from torch.utils.data._utils.collate import default_collate
 from data_loaders.humanml.utils.word_vectorizer import WordVectorizer
 from data_loaders.humanml.utils.get_opt import get_opt
 
+import z_config
+
 def collate_fn(batch):
     batch.sort(key=lambda x: x[3], reverse=True)
     return default_collate(batch)
@@ -211,6 +213,10 @@ class Text2MotionDatasetV2(data.Dataset):
             self.max_length = self.opt.fixed_len
         self.pointer = 0
         self.max_motion_length = opt.max_motion_length
+        self.motion_exceed = 200
+        if z_config.get_diy_config().process_original_MB_data:
+            self.max_motion_length=243  ## 否则是196
+            self.motion_exceed = 243
         min_motion_len = 40 if self.opt.dataset_name =='t2m' else 24
 
         data_dict = {}
@@ -238,7 +244,7 @@ class Text2MotionDatasetV2(data.Dataset):
                 try:
                     motion = np.load(pjoin(opt.motion_dir, name + '.npy'))
                     motion_263 = np.load(pjoin(opt.motion_dir.replace("joints", "joint_vecs"), name + '.npy'))
-                    if (len(motion)) < min_motion_len or (len(motion) >= 200):
+                    if (len(motion)) < min_motion_len or (len(motion) >= self.motion_exceed):
                         continue
                     text_data = []
                     flag = False
@@ -262,11 +268,14 @@ class Text2MotionDatasetV2(data.Dataset):
                                 try:
                                     n_motion = motion[int(f_tag*20) : int(to_tag*20)]
                                     n_motion_263 = motion_263[int(f_tag*20) : int(to_tag*20)]
-                                    if (len(n_motion)) < min_motion_len or (len(n_motion) >= 200):
+                                    if (len(n_motion)) < min_motion_len or (len(n_motion) >= self.motion_exceed):
                                         continue
-                                    new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
-                                    while new_name in data_dict:
-                                        new_name = random.choice('ABCDEFGHIJKLMNOPQRSTUVW') + '_' + name
+                                    new_name = None
+                                    for letter in 'ABCDEFGHIJKLMNOPQRSTUVW':
+                                        candidate = f"{letter}_{name}"
+                                        if candidate not in data_dict:
+                                            new_name = candidate
+                                            break
                                     assert len(n_motion)==len(n_motion_263)
                                     data_dict[new_name] = {'motion': n_motion,
                                                            'motion_263': n_motion_263,
@@ -292,11 +301,11 @@ class Text2MotionDatasetV2(data.Dataset):
                     print(f"未知错误: {e}")
 
             name_list, length_list = zip(*sorted(zip(new_name_list, length_list), key=lambda x: x[1]))
-            print(f'Saving motions to cache file [{cache_path}]...')
-            np.save(cache_path, {
-                'name_list': name_list,
-                'length_list': length_list,
-                'data_dict': data_dict})
+            # print(f'Saving motions to cache file [{cache_path}]...')
+            # np.save(cache_path, {
+            #     'name_list': name_list,
+            #     'length_list': length_list,
+            #     'data_dict': data_dict})
 
         self.mean = mean
         self.std = std
@@ -380,32 +389,39 @@ class Text2MotionDatasetV2(data.Dataset):
         else:
             coin2 = 'single'
 
-        debug=True
-        if debug:
-            m_length = (m_length // self.opt.unit_length) * self.opt.unit_length
-        else:
-            if coin2 == 'double':
-                m_length = (m_length // self.opt.unit_length - 1) * self.opt.unit_length
-            elif coin2 == 'single':
-                m_length = (m_length // self.opt.unit_length) * self.opt.unit_length
-        
-        original_length = None
-        if self.opt.fixed_len > 0:  ## 这一步没什么用，直接跳过
-            # Crop fixed_len
-            original_length = m_length
-            m_length = self.opt.fixed_len
-        
-        # idx = random.randint(0, len(motion) - m_length)
-        idx = random.randint(0, 0)
-        motion = motion.reshape(motion.shape[0], -1)
-        motion = motion[idx:idx+m_length]
-
-        length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
-
-        if m_length < self.max_motion_length:
+        if z_config.get_diy_config().process_original_MB_data:
+            motion = motion.reshape(motion.shape[0], -1)
             motion=np.concatenate([
-                motion, np.zeros((self.max_motion_length-m_length, motion.shape[1]))
-            ], axis=0)
+                    motion, np.zeros((self.max_motion_length-m_length, motion.shape[1]))
+                ], axis=0)
+            length = m_length
+        else:   ## 这里主要走的是要pooling的代码
+            debug=True
+            if debug:
+                m_length = (m_length // self.opt.unit_length) * self.opt.unit_length
+            else:
+                if coin2 == 'double':
+                    m_length = (m_length // self.opt.unit_length - 1) * self.opt.unit_length
+                elif coin2 == 'single':
+                    m_length = (m_length // self.opt.unit_length) * self.opt.unit_length
+            
+            original_length = None
+            if self.opt.fixed_len > 0:  ## 这一步没什么用，直接跳过
+                # Crop fixed_len
+                original_length = m_length
+                m_length = self.opt.fixed_len
+            
+            # idx = random.randint(0, len(motion) - m_length)
+            idx = random.randint(0, 0)
+            motion = motion.reshape(motion.shape[0], -1)
+            motion = motion[idx:idx+m_length]
+
+            length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
+
+            if m_length < self.max_motion_length:
+                motion=np.concatenate([
+                    motion, np.zeros((self.max_motion_length-m_length, motion.shape[1]))
+                ], axis=0)
 
         return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), key
         # return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), MB_emb, key

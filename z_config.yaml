@@ -1,0 +1,2 @@
+process_original_MB_data: True ## 如果这个为True，就意味着没有pooling，然后出来的结果应该要和原本ML3D的数据长度是一样的，而不是4的倍数
+use_multiview: False

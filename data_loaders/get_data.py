@@ -47,9 +47,11 @@ def get_dataset(name, num_frames, split='train', hml_mode='train', abs_path='.',
 def get_dataset_loader(name, batch_size, num_frames, split='train', hml_mode='train', fixed_len=0, pred_len=0, 
                        device=None, autoregressive=False, multi_view=False):
     # #########
-    # split='test'
+    # 反正在这个代码中，归一化全部都已经被我取消掉了，所以随便使用split也不用相应修改hml_mode
+    split='val'
     # hml_mode='eval'
     # #########
+    batch_size=1
     dataset = get_dataset(name, num_frames, split=split, hml_mode=hml_mode, fixed_len=fixed_len, 
                 device=device, autoregressive=autoregressive, multi_view=multi_view)
     

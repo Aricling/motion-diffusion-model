@@ -15,8 +15,10 @@ from utils.model_util import create_model_and_diffusion
 from train.train_platforms import WandBPlatform, ClearmlPlatform, TensorboardPlatform, NoPlatform  # required for the eval operation
 from MotionBERT.lib.utils.tools import *
 from MotionBERT.lib.utils.learning import *
+import z_config
 
 def main():
+    z_config.init_diy_config()
     args = train_args()
     fixseed(args.seed)
     train_platform_type = eval(args.train_platform_type)
