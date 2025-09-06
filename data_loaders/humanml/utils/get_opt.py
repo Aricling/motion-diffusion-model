@@ -56,7 +56,7 @@ def get_opt(opt_path, device):
 
     if opt.dataset_name == 't2m':
         opt.data_root = './dataset/HumanML3D'
-        opt.MB_rep_root = "/data/mengqing/HumanML3D_MB_rep_new"
+        opt.MB_rep_root = "/data/mengqing/HumanML3D_MB_rep"
         # opt.motion_dir = pjoin(opt.data_root, 'new_joint_vecs')
         opt.motion_dir = pjoin(opt.data_root, 'new_joints')  ## 现在我直接换成(22,3)的joints维度了
         opt.text_dir = pjoin(opt.data_root, 'texts')

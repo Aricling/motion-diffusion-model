@@ -345,7 +345,7 @@ class Text2MotionDatasetV2(data.Dataset):
             emb_60=np.load(os.path.join(self.opt.MB_rep_root, f"{key}_view_+060.npy"))
             MB_emb=(emb_60_rev+emb_30_rev+emb_00+emb_30+emb_60)/5
         else:
-            MB_emb = np.load(os.path.join(self.opt.MB_rep_root, f"{key}.npy"))
+            MB_emb = np.load(os.path.join(self.opt.MB_rep_root, f"{key}.npy"))  ## 这个本来是pooling完之后的，不能直接使用，得改成原版
 
         # Randomly select a caption
         text_data = random.choice(text_list)
@@ -395,6 +395,7 @@ class Text2MotionDatasetV2(data.Dataset):
         idx = random.randint(0, 0)
         motion = motion.reshape(motion.shape[0], -1)
         motion = motion[idx:idx+m_length]
+        MB_emb = MB_emb[idx:idx+m_length]
 
         length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
 
@@ -402,6 +403,9 @@ class Text2MotionDatasetV2(data.Dataset):
             motion=np.concatenate([
                 motion, np.zeros((self.max_motion_length-m_length, motion.shape[1]))
             ], axis=0)
+            MB_emb=np.concatenate([
+                MB_emb, np.zeros((self.max_motion_length-m_length, *MB_emb.shape[1:]))
+            ])
 
         return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), MB_emb, key
 
