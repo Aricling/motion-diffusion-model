@@ -292,7 +292,23 @@ class CLIP(nn.Module):
         self.ln_final = LayerNorm(transformer_width)
 
         self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
-        self.token_projection=nn.Linear(in_features=512, out_features=512)
+        # self.token_projection=nn.Linear(in_features=512, out_features=512)
+        num_joints = 7
+        in_dim = 512
+        hidden_dim = 256
+        out_dim = 32
+        self.num_joints = num_joints
+        self.num_motion_tokens = 49   # motion token 的数量（原来写死为 49）
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+
+        self.proj_layers = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(in_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, out_dim)
+            ) for _ in range(num_joints)
+        ])
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
         self.initialize_parameters()
@@ -325,9 +341,9 @@ class CLIP(nn.Module):
 
         # if self.text_projection is not None:
         #     nn.init.normal_(self.text_projection, std=self.transformer.width ** -0.5)
-        if self.token_projection is not None:
-            nn.init.normal_(self.token_projection.weight, std=self.transformer.width ** -0.5)
-            nn.init.zeros_(self.token_projection.bias)
+        # if self.token_projection is not None:
+        #     nn.init.normal_(self.token_projection.weight, std=self.transformer.width ** -0.5)
+        #     nn.init.zeros_(self.token_projection.bias)
 
     def build_attention_mask(self):
         # lazily create causal attention mask, with full attention between the vision tokens
@@ -344,7 +360,7 @@ class CLIP(nn.Module):
     def encode_image(self, image):
         return self.visual(image.type(self.dtype))
 
-    def encode_text(self, text, token_projection=True, texts_lens_list=None, return_sen_emb=None):
+    def encode_text(self, text, token_projection=True, texts_lens_list=None, return_motion_proj=True):
         return_sen_emb=z_config.get_diy_config().model.clip_use_sen_emb
 
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
@@ -355,35 +371,41 @@ class CLIP(nn.Module):
         x = self.ln_final(x).type(self.dtype)
 
         if token_projection:
-            # --- 获取 motion token 索引 ---
-            lens_tensor = torch.tensor(texts_lens_list, device=x.device)  # [batch_size]
-            batch_size, _, dim = x.shape
-            
-            motion_start_idx = lens_tensor + 1  # 起始索引 [batch_size]
-            motion_range = torch.arange(28, device=x.device)  # 偏移量 [28]
-            motion_indices = motion_start_idx.unsqueeze(1) + motion_range  # [batch_size, 28]
+            if texts_lens_list is None:
+                raise ValueError("texts_lens_list is required when token_projection=True")
 
-            # --- 提取 motion tokens ---
-            # 使用 advanced indexing 提取 motion tokens
-            b_idx = torch.arange(batch_size, device=x.device).unsqueeze(1)  # [batch_size, 1]
-            x_motion_tokens = x[b_idx, motion_indices]  # [batch_size, 28, dim]
+            device = x.device
+            lens_tensor = torch.tensor(texts_lens_list, device=device, dtype=torch.long)  # [B]
+            batch_size, seq_len, dim = x.shape
 
-            # --- 映射 motion tokens ---
-            x_motion_tokens_proj = self.token_projection(x_motion_tokens).to(x.dtype)  # [batch_size, 28, dim]
+            # motion token 索引
+            motion_start_idx = lens_tensor + 1  # 跳过 <|startofmotion|>
+            motion_range = torch.arange(self.num_motion_tokens, device=device, dtype=torch.long)  # [49]
+            motion_indices = motion_start_idx.unsqueeze(1) + motion_range  # [B, 49]
 
-            # --- 将映射后的 motion tokens 插回 ---
-            # x.scatter_(
-            #     1,  # 维度
-            #     motion_indices.unsqueeze(-1).expand(-1, -1, dim),  # 索引 [batch_size, 28, dim]
-            #     x_motion_tokens_proj  # 替换内容 [batch_size, 28, dim]
-            # )
-            if return_sen_emb:
-                eos_token_id = 49407
-                eos_positions = (text == eos_token_id).float().argmax(dim=1)  # shape: [batch_size]
-                sen_emb = (x[torch.arange(x.shape[0]), eos_positions] @ self.text_projection).unsqueeze(1)
-                return torch.cat([sen_emb, x_motion_tokens_proj],dim=1)
+            # 安全检查
+            if int(motion_indices.max()) >= seq_len:
+                raise IndexError(
+                    f"motion indices exceed sequence length: max_index={int(motion_indices.max())}, seq_len={seq_len}"
+                )
 
-        return x_motion_tokens_proj  # shape: [batch_size, n_ctx, dim]
+            # 提取 motion tokens
+            batch_idx = torch.arange(batch_size, device=device).unsqueeze(1)
+            x_motion_tokens = x[batch_idx, motion_indices]  # [B, 49, D]
+
+            # 过 7 个 MLP
+            outs = [layer(x_motion_tokens) for layer in self.proj_layers]  # 每个 [B, 49, out_dim]
+            x_motion_tokens_proj = torch.stack(outs, dim=2)  # [B, 49, 7, 32]
+        if return_sen_emb:
+            eos_token_id = 49407
+            eos_positions = (text == eos_token_id).float().argmax(dim=1)  # shape: [batch_size]
+            sen_emb = (x[torch.arange(x.shape[0]), eos_positions] @ self.text_projection).unsqueeze(1)
+            # return torch.cat([sen_emb, x_motion_tokens_proj],dim=1)
+            return x, x_motion_tokens_proj, sen_emb
+        
+        if return_motion_proj:
+            return x, x_motion_tokens_proj
+        return x
 
 
     def forward(self, image, text):

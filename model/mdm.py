@@ -198,6 +198,8 @@ class MDM(nn.Module):
 
         self.rot2xyz = Rotation2xyz(device='cpu', dataset=self.dataset)
 
+        self.x_motion_proj_layer = nn.Linear(in_features=7*32, out_features=512)
+
     def zero_module(self, module):
         """
         Zero out the parameters of a module and return it.
@@ -215,17 +217,16 @@ class MDM(nn.Module):
         return clip_model
 
     def mask_cond(self, cond, force_mask=False):
-        bs = cond.shape[-2]
+        bs = cond.shape[0]
         if force_mask:
             return torch.zeros_like(cond)
         elif self.training and self.cond_mask_prob > 0.:
-            mask = torch.bernoulli(torch.ones(bs, device=cond.device) * self.cond_mask_prob).view(1, bs, 1)  # 1-> use null_cond, 0-> use real cond
+            mask = torch.bernoulli(torch.ones(bs, device=cond.device) * self.cond_mask_prob).view(bs, 1, 1)  # 1-> use null_cond, 0-> use real cond
             return cond * (1. - mask)
         else:
             return cond
 
     def clip_encode_text(self, raw_text):
-        # raw_text - list (batch_size length) of strings with input text prompts
         device = next(self.parameters()).device
         max_text_len = 75 if self.dataset in ['humanml', 'kit'] else None  # Specific hardcoding for humanml dataset
         if max_text_len is not None:
@@ -243,10 +244,19 @@ class MDM(nn.Module):
 
         texts = texts.to(device)
         texts_tokens_padded = texts_tokens_padded.to(device)
-        
+
         if z_config.get_diy_config().model.use_avg_clip_model:
-            return self.clip_model_avg.encode_text(texts, texts_lens_list=texts_lens_list).float(), texts_lens_list
-        return self.clip_model.encode_text(texts, texts_lens_list=texts_lens_list).float(), texts_lens_list
+            (x_new, x_motion_proj, sen_emb) = self.clip_model_avg.encode_text(
+                texts, texts_lens_list=texts_lens_list, return_motion_proj=True
+            )
+        else:
+            (x_new, x_motion_proj, sen_emb) = self.clip_model.encode_text(
+                texts, texts_lens_list=texts_lens_list, return_motion_proj=True
+            )
+        x_new, x_motion_proj = x_new.float(), x_motion_proj.float()
+
+        return x_new, texts_lens_list, x_motion_proj, sen_emb
+        # raw_text - list (batch_size length) of strings with input text prompts
     
     def bert_encode_text(self, raw_text):
         # enc_text = self.clip_model(raw_text)
@@ -338,7 +348,9 @@ class MDM(nn.Module):
             if 'text_embed' in y.keys():  # caching option
                 enc_text = y['text_embed']
             else:
-                enc_text, texts_len_list = self.encode_text(y['text'])  ## [bs, 4x7, 512],如果使用cls_token第二维就是29
+                enc_text, texts_len_list, x_motion_proj, sen_emb = self.encode_text(y['text'])  ## [bs, 49, 7, 32],如果使用cls_token第二维就是29
+                x_motion_proj_emb = self.x_motion_proj_layer(x_motion_proj.reshape(*x_motion_proj.shape[:2], -1))
+                enc_text = torch.cat((sen_emb, x_motion_proj_emb), dim=1)
                 if z_config.get_diy_config().training.use_gt_MB_simplified_data:
                     enc_text[:,1:,:] = y['motion_token_emb']
                 
@@ -363,7 +375,7 @@ class MDM(nn.Module):
                 if text_mask.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
                     text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
             text_emb = self.embed_text(self.mask_cond(enc_text, force_mask=force_mask))  # casting mask for the single-prompt-for-all case
-            if self.emb_policy == 'add':
+            if self.emb_policy == 'add':    ## 走的这个
                 emb = text_emb.permute(1,0,2).contiguous() + time_emb
             else:
                 emb = torch.cat([time_emb, text_emb], dim=0)

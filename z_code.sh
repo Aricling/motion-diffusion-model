@@ -1,7 +1,7 @@
 ## 训练代码
 # 以微调的CLIP来训练MDM，启动代码，并且加上了在训练的时候验证
 python -m train.train_mdm \
-    --save_dir save/train_mdm_split_text_and_motion_linput_linear \
+    --save_dir save/0909_train_mdm_w_fted_clip_on_VAE_try_0 \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \

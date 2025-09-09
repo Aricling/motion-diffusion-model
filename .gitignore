@@ -144,3 +144,5 @@ dataset/t2m_train.npy
 dataset/HumanML3D
 MotionBERT/
 dataset/t2m_test.npy
+dataset/t2m_val.npy
+vae_all/checkpoints

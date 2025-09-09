@@ -1,9 +1,10 @@
 model:
-  clip_model_path: save/finetune_clip_all__layers/model000450000.pt ## 这个全finetune的是loss最小的，就先用这个
+  clip_model_path: save/0908_finetune_clip_all_layers_using_VAE_try1/model000350000.pt ## 这个全finetune的是loss最小的，就先用这个
+  # clip_model_path: save/finetune_clip_all__layers/model000450000.pt ## 这个全finetune的是loss最小的，就先用这个
   # clip_model_path: save/finetune_clip_use_multiview/model000450000.pt ## 这个是multiview的权重
   clip_use_sen_emb: True  ## 这个加了发现是很有用的，之后就用这个True
   use_avg_clip_model: True
-  use_contronet_injection: True ## 这个置为True时，目前代码中arch一定得是encoder，decoder就不支持，也没有必要用controlnet注入
+  use_contronet_injection: false ## 这个置为True时，目前代码中arch一定得是encoder，decoder就不支持，也没有必要用controlnet注入
   # MDM_model_file: mdm_add_embed_motion
   MDM_model_file: mdm
 
@@ -19,4 +20,4 @@ data:
   Temperal_further_pooling: false
   Joint_further_pooling: false
 
-overwrite_config: False  ## 一般情况下默认为False，只有resume training的时候才会变成True
+overwrite_config: True  ## 一般情况下默认为False，只有resume training的时候才会变成True
