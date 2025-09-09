@@ -45,7 +45,7 @@ def masked_goal_l2(pred_goal, ref_goal, cond, all_goal_joint_names):
     loss =  loc_loss + heading_loss
     return loss
 
-def clip_finetune_l2_loss(model_output, raw_text_output, MB_targets, texts_lens_list, motion_lens_list):
+def clip_finetune_l2_loss(model_output, x_motion_proj, raw_text_output, MB_targets, texts_lens_list, motion_lens_list):
     batch_size, seq_len, dim = model_output.shape
     texts_lens_tensor = torch.tensor(texts_lens_list, device=model_output.device)   ## 这里指的是text的length
     motion_lens_tensor = torch.tensor(motion_lens_list, device=model_output.device) # motion frame lengths
@@ -60,44 +60,34 @@ def clip_finetune_l2_loss(model_output, raw_text_output, MB_targets, texts_lens_
     loss_clip = ((diff_clip ** 2) * mask).sum() / (mask.sum() * dim)
     
     # ----- Motion Token Loss -----
-    # Construct a tensor to hold all `lens_sub + 1` and `lens_sub + 1 + 28` indices
-    valid_motion_indices = torch.stack([
-        texts_lens_tensor + 1,
-        texts_lens_tensor + 1 + 28
-    ], dim=1)  # Shape: [batch_size, 2]
-
-    # Use indices to gather the valid motion token slices from model_output
-    # Note: valid_motion_indices[:, 0] means start index, valid_motion_indices[:, 1] means end index
-    motion_slices = torch.stack([
-        model_output[b_idx, valid_motion_indices[b_idx, 0]:valid_motion_indices[b_idx, 1]]
-        for b_idx in range(batch_size)
-    ], dim=0)  # Shape: [batch_size, 28, dim]
-
-    diff_motion = motion_slices - MB_targets  # Compute differences, [batch_size, 28, dim]
+    diff_motion = x_motion_proj - MB_targets  # Compute differences, [batch_size, 49, 7, 32]
     
     # ----- Motion Mask Generation -----
-    # 对于每个 batch，构造一个 [28] 的 mask：0 表示该位置的融合帧无效，1 表示有效
-    frame_group_count = 4
-    frames_per_group = 49
+    frame_group_count = 49
+    frames_per_group = 4
     tokens_per_group = 7
+    B, groups, num_joints, out_dim = x_motion_proj.shape    ## [batch_size, 49, 7, 32]
 
-    # 生成融合帧是否有效的布尔 mask [batch_size, 4]
-    fuse_mask_4 = torch.arange(1, frame_group_count + 1, device=model_output.device).view(1, -1) * frames_per_group
-    # motion_lens_tensor: [B] → [B, 1]
-    fuse_mask_4 = motion_lens_tensor.view(-1, 1) >= fuse_mask_4  # [B, 4] 布尔值
+    # ----- 生成 motion 有效 mask -----
+    # [1, 49]，表示每个 group 对应的帧数阈值
+    fuse_mask = torch.arange(1, frame_group_count + 1, device=model_output.device).view(1, -1) * frames_per_group  
 
-    # 扩展为每组 7 个 token → [B, 4, 7] → reshape 为 [B, 28]
-    motion_mask = fuse_mask_4.unsqueeze(-1).expand(-1, -1, tokens_per_group).reshape(batch_size, 28)  # [B, 28]
+    # motion_lens_tensor: [B] → [B, 1]，和 [1, 49] 广播比较
+    fuse_mask = motion_lens_tensor.view(-1, 1) >= fuse_mask    # [B, 49]，bool
 
-    # 再加一个维度 [B, 28, 1] 以便广播到 diff_motion
-    motion_mask = motion_mask.unsqueeze(-1).float()
+    # 展开到和 diff_motion 一样的 shape: [B, 49, 7, 32]
+    motion_mask = fuse_mask.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, num_joints, out_dim).float()
 
-    # 应用 mask 计算 loss
-    loss_motion_token = ((diff_motion ** 2) * motion_mask).sum() / motion_mask.sum() / dim
-    
+    # ----- Motion Loss -----
+    denom = motion_mask.sum()
+    if denom > 0:
+        loss_motion_token = ((diff_motion ** 2) * motion_mask).sum() / denom
+    else:
+        loss_motion_token = torch.tensor(0., device=diff_motion.device)
+
     loss_dict = {
         'loss_clip': loss_clip,
         'loss_motion_token': loss_motion_token
     }
-    
+
     return loss_dict

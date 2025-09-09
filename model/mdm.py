@@ -115,7 +115,9 @@ class MDM(nn.Module):
 
                     self.clip_model.token_embedding.weight.register_hook(selective_grad_hook)
 
-                    for param in self.clip_model.token_projection.parameters():
+                    # for param in self.clip_model.token_projection.parameters():
+                    #     param.requires_grad = True
+                    for param in self.clip_model.proj_layers.parameters():
                         param.requires_grad = True
 
                     save_dir=kargs.get("save_dir", None)
@@ -189,8 +191,16 @@ class MDM(nn.Module):
 
         texts = texts.to(device)
         texts_tokens_padded = texts_tokens_padded.to(device)
-        
-        return self.clip_model.encode_text(texts, texts_lens_list=texts_lens_list).float(), self.clip_model_ori.encode_text(texts_tokens_padded, token_projection=False).float(), texts_lens_list
+
+        (x_new, x_motion_proj) = self.clip_model.encode_text(
+            texts, texts_lens_list=texts_lens_list, return_motion_proj=True
+        )
+        x_new, x_motion_proj = x_new.float(), x_motion_proj.float()
+
+        x_ori = self.clip_model_ori.encode_text(texts_tokens_padded, token_projection=False, return_motion_proj=False).float()
+
+        return x_new, x_ori, texts_lens_list, x_motion_proj      
+        # return self.clip_model.encode_text(texts, texts_lens_list=texts_lens_list).float(), self.clip_model_ori.encode_text(texts_tokens_padded, token_projection=False).float(), texts_lens_list
     
     def bert_encode_text(self, raw_text):
         # enc_text = self.clip_model(raw_text)
@@ -210,9 +220,9 @@ class MDM(nn.Module):
             if 'text_embed' in y.keys():  # caching option
                 enc_text = y['text_embed']
             else:
-                model_output, target_texts, texts_len_list = self.encode_text(y['text'])
+                model_output, target_texts, texts_len_list, x_motion_proj = self.encode_text(y['text'])
 
-        return model_output, target_texts, texts_len_list
+        return model_output, target_texts, texts_len_list, x_motion_proj
 
 
     def _apply(self, fn):

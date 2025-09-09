@@ -230,7 +230,8 @@ def tokenize(texts: Union[str, List[str]], context_length: int = 77, truncate: b
     som_token = _tokenizer.encoder["<|startofmotion|>"]
     eom_token = _tokenizer.encoder['<|endofmotion|>']
     motion_token = _tokenizer.encoder['<|motion|>']
-    all_tokens = [[sot_token] + _tokenizer.encode(text) + [eot_token] + [som_token] + 4*7*[motion_token] + [eom_token] for text in texts]
+    # all_tokens = [[sot_token] + _tokenizer.encode(text) + [eot_token] + [som_token] + 4*7*[motion_token] + [eom_token] for text in texts]
+    all_tokens = [[sot_token] + _tokenizer.encode(text) + [eot_token] + [som_token] + 49*[motion_token] + [eom_token] for text in texts]
     all_tokens_ori= [[sot_token] + _tokenizer.encode(text) + [eot_token] for text in texts]
     
     if version.parse(torch.__version__) < version.parse("1.8.0"):
@@ -241,18 +242,21 @@ def tokenize(texts: Union[str, List[str]], context_length: int = 77, truncate: b
     for i, tokens in enumerate(all_tokens):
         if len(tokens) > context_length:
             if truncate:
-                tokens = tokens[:47]+tokens[-30:]
-                tokens[46] = eot_token
+                tokens = tokens[:26]+tokens[-51:]
+                tokens[25] = eot_token
             else:
                 raise RuntimeError(f"Input {texts[i]} is too long for context length {context_length}")
         result[i, :len(tokens)] = torch.tensor(tokens)  ## 这边把有值的给赋了，剩下的都是0了，相当于已经做好了填充
 
     ## 对于all_tokens_ori也要有个截断控制
     for i, tokens in enumerate(all_tokens_ori):
-        if len(tokens) > context_length-30:
+        if len(tokens) > context_length-51:
             if truncate:
-                tokens = tokens[:47]
-                tokens[46] = eot_token
+                tokens = tokens[:26]
+                tokens[25] = eot_token
             all_tokens_ori[i]=tokens
+
+    # assert all((result[i, :len(a)] == torch.tensor(a)).all().item() for i, a in enumerate(all_tokens_ori)), \
+    #    "Mismatch between result and all_tokens_ori!"
 
     return result, all_tokens_ori

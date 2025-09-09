@@ -17,6 +17,10 @@ from train.train_platforms import ClearmlPlatform, TensorboardPlatform, NoPlatfo
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
+from utils.get_opt_vae import get_opt
+from vae_all.vae.model import VAE
+from vae_all.options.denoiser_option import arg_parse 
+
 import z_config
 
 def evaluate_matching_score(eval_wrapper, motion_loaders, file):
@@ -241,7 +245,20 @@ def evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replicati
         
         return mean_dict
         '''
+def load_and_freeze_vae(opt):
+    opt_path = pjoin(opt.checkpoints_dir, opt.dataset_name_vae, opt.vae_name, 'opt.txt')
+    vae_opt = get_opt(opt_path, opt.device)
 
+    model = VAE(vae_opt)
+    # ckpt = torch.load(pjoin('vae_all', vae_opt.checkpoints_dir, vae_opt.dataset_name, vae_opt.name, 'model', 'net_best_fid.tar'),
+                            # map_location='cpu')
+    ckpt = torch.load(pjoin('vae_all', vae_opt.checkpoints_dir, vae_opt.dataset_name, vae_opt.name, 'model', 'net_best_mse.tar'),
+                            map_location='cpu')
+    model.load_state_dict(ckpt["vae"])
+    model.freeze()
+    model.to(dist_util.dev())
+    print(f'Loading VAE Model {opt.vae_name}')
+    return model
 
 if __name__ == '__main__':
     args = evaluation_parser()
@@ -276,7 +293,7 @@ if __name__ == '__main__':
         diversity_times = 300
         replication_times = 5  # about 3 Hrs
     elif args.eval_mode == 'wo_mm':
-        num_samples_limit = 1000
+        num_samples_limit = 3000
         run_mm = False
         mm_num_samples = 0
         mm_num_repeats = 0
@@ -299,8 +316,8 @@ if __name__ == '__main__':
     logger.configure()
 
     logger.log("creating data loader...")
-    # split = 'test'
-    split = 'train'
+    split = 'test'
+    # split = 'train'
     gt_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split=split, hml_mode='gt')
     # gen_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split=split, hml_mode='eval')
     # added new features + support for prefix completion:
@@ -322,6 +339,10 @@ if __name__ == '__main__':
     model.to(dist_util.dev())
     model.eval()  # disable random masking
 
+    ## 初始化VAE
+    vae_opt = arg_parse(True)
+    vae = load_and_freeze_vae(vae_opt)
+
     eval_motion_loaders = {
         ################
         ## HumanML3D Dataset##
@@ -330,7 +351,7 @@ if __name__ == '__main__':
             model=model, diffusion=diffusion, batch_size=args.batch_size,
             ground_truth_loader=gen_loader, mm_num_samples=mm_num_samples, mm_num_repeats=mm_num_repeats, 
             max_motion_length=gt_loader.dataset.opt.max_motion_length, num_samples_limit=num_samples_limit, 
-            scale=args.guidance_param
+            scale=args.guidance_param, vae=vae
         )
     }
 

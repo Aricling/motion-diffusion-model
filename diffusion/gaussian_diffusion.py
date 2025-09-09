@@ -607,6 +607,7 @@ class GaussianDiffusion:
         cond_fn_with_grad=False,
         dump_steps=None,
         const_noise=False,
+        vae=None
     ):
         """
         Generate samples from the model.
@@ -635,8 +636,9 @@ class GaussianDiffusion:
         if 'text' in model_kwargs['y'].keys():
             # encoding once instead of each iteration saves lots of time
             # model_kwargs['y']['text_embed'] = model.encode_text(model_kwargs['y']['text'])
-            model_output, targets_texts, texts_len_list = model.encode_text(model_kwargs['y']['text'])  ## targets_texts是原本的CLIP
-        terms = self.clip_finetune_l2_loss(model_output, targets_texts, model_kwargs['y']['MB_emb'], texts_len_list, motion_lens_list=model_kwargs['y']['lengths'])
+            model_output, targets_texts, texts_len_list, x_motion_proj = model.encode_text(model_kwargs['y']['text'])  ## targets_texts是原本的CLIP
+            target_MB_motion_VAE, _ = vae.encode(model_kwargs['y']['MB_emb'])
+        terms = self.clip_finetune_l2_loss(model_output, x_motion_proj, targets_texts, target_MB_motion_VAE, texts_len_list, motion_lens_list=model_kwargs['y']['lengths'])
         return terms
         
 
@@ -1245,30 +1247,9 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            # model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
-            model_output, targets_texts, texts_len_list = model(x_start, self._scale_timesteps(t), **model_kwargs)
 
-            if self.model_var_type in [
-                ModelVarType.LEARNED,
-                ModelVarType.LEARNED_RANGE,
-            ]:
-                B, C = x_t.shape[:2]
-                assert model_output.shape == (B, C * 2, *x_t.shape[2:])
-                model_output, model_var_values = th.split(model_output, C, dim=1)
-                # Learn the variance using the variational bound, but don't let
-                # it affect our mean prediction.
-                frozen_out = th.cat([model_output.detach(), model_var_values], dim=1)
-                terms["vb"] = self._vb_terms_bpd(
-                    model=lambda *args, r=frozen_out: r,
-                    x_start=x_start,
-                    x_t=x_t,
-                    t=t,
-                    clip_denoised=False,
-                )["output"]
-                if self.loss_type == LossType.RESCALED_MSE:
-                    # Divide by 1000 for equivalence with initial implementation.
-                    # Without a factor of 1/1000, the VB term hurts the MSE term.
-                    terms["vb"] *= self.num_timesteps / 1000.0
+            ## !!!!现在这里的motion_output只用来做text的loss了，做和隐空间MB表示的loss是使用x_motion_proj来做的
+            model_output, targets_texts, texts_len_list, x_motion_proj = model(x_start, self._scale_timesteps(t), **model_kwargs)
 
             target = {
                 # ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(
@@ -1279,7 +1260,7 @@ class GaussianDiffusion:
             }[self.model_mean_type]
             # assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
 
-            terms = self.clip_finetune_l2_loss(model_output, targets_texts, x_start, texts_len_list, motion_lens_list=model_kwargs['y']['lengths'])
+            terms = self.clip_finetune_l2_loss(model_output, x_motion_proj, targets_texts, x_start, texts_len_list, motion_lens_list=model_kwargs['y']['lengths'])
             # terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
 
             target_xyz, model_output_xyz = None, None

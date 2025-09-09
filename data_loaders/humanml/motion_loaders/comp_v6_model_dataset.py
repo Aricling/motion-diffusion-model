@@ -148,7 +148,7 @@ class CompV6GeneratedDataset(Dataset):
 
 class CompMDMGeneratedDataset(Dataset):
 
-    def __init__(self, args, model, diffusion, dataloader, mm_num_samples, mm_num_repeats, max_motion_length, num_samples_limit, scale=1.):
+    def __init__(self, args, model, diffusion, dataloader, mm_num_samples, mm_num_repeats, max_motion_length, num_samples_limit, scale=1., vae=None):
         self.args = args
         self.dataloader = dataloader
         self.dataset = dataloader.dataset
@@ -221,6 +221,7 @@ class CompMDMGeneratedDataset(Dataset):
                         dump_steps=None,
                         noise=None,
                         const_noise=False,
+                        vae=vae
                     )
 
                     # ✅ 收集当前 batch 的 loss

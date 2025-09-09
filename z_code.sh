@@ -1,6 +1,6 @@
-## 其实是finetune clip训练的启动代码,默认都是finetune CLIP所有的线性层
-python -m train.train_mdm_w_motionbert \
-    --save_dir save/finetune_clip_all_layers_try_1 \
+## 其实是finetune clip训练的启动代码,默认都是finetune CLIP所有的线性层，在这个库中会自动调用VAE
+python -m train.train_finetune_clip \
+    --save_dir save/0908_finetune_clip_all_layers_using_VAE \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \
@@ -10,13 +10,13 @@ python -m train.train_mdm_w_motionbert \
     --device 3 \
     --overwrite \
     --train_platform_type WandBPlatform \
-    --pooling 1 \
-    --motionbert_config /home/mengqing/usr/motion-diffusion-model/MotionBERT/configs/pose3d/MB_ft_h36m_global_lite.yaml \
-    --evaluate_motionbert /home/mengqing/usr/motion-diffusion-model/MotionBERT/checkpoint/pose3d/FT_MB_lite_MB_ft_h36m_global_lite/best_epoch.bin
+    --pooling 1
     # --multiview
 
-# eval fintuned CLIP启动代码
-python -m eval.eval_humanml --model_path /home/mengqing/usr/motion-diffusion-model/save/finetune_clip_all__layers/lora000600000.pt
+# eval fintuned CLIP启动代码，最后会报错，不过会运行成功的
+python -m eval.eval_fted_clip \
+    --model_path /home/mengqing/usr/motion-diffusion-model/save/0908_finetune_clip_all_layers_using_VAE_try1/model000250000.pt \
+    --device 1
 
 
 # 训来MDM+distilled Bert的代码
