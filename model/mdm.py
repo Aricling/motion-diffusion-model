@@ -10,6 +10,7 @@ from model.BERT.BERT_encoder import load_bert
 from utils.misc import WeightedSum
 from utils.lora_util import apply_lora_attn_mlp, count_parameters, save_trainable_parameter_names
 from utils.dist_util import dev
+import z_config
 
 
 
@@ -117,8 +118,12 @@ class MDM(nn.Module):
 
                     # for param in self.clip_model.token_projection.parameters():
                     #     param.requires_grad = True
-                    for param in self.clip_model.proj_layers.parameters():
-                        param.requires_grad = True
+                    if z_config.get_diy_config().training.use_single_projection_layer:
+                        for param in self.clip_model.proj_layer.parameters():
+                            param.requires_grad = True
+                    else:
+                        for param in self.clip_model.proj_layers.parameters():
+                            param.requires_grad = True
 
                     save_dir=kargs.get("save_dir", None)
                     if save_dir is not None:

@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
+import z_config
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -301,13 +302,16 @@ class CLIP(nn.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
 
-        self.proj_layers = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(in_dim, hidden_dim),
-                nn.GELU(),
-                nn.Linear(hidden_dim, out_dim)
-            ) for _ in range(num_joints)
-        ])
+        if z_config.get_diy_config().training.use_single_projection_layer:
+            self.proj_layer = nn.Linear(in_features=512, out_features=7*32)
+        else:
+            self.proj_layers = nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(in_dim, hidden_dim),
+                    nn.GELU(),
+                    nn.Linear(hidden_dim, out_dim)
+                ) for _ in range(num_joints)
+            ])
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
         self.initialize_parameters()
@@ -390,9 +394,12 @@ class CLIP(nn.Module):
             batch_idx = torch.arange(batch_size, device=device).unsqueeze(1)
             x_motion_tokens = x[batch_idx, motion_indices]  # [B, 49, D]
 
-            # 过 7 个 MLP
-            outs = [layer(x_motion_tokens) for layer in self.proj_layers]  # 每个 [B, 49, out_dim]
-            x_motion_tokens_proj = torch.stack(outs, dim=2)  # [B, 49, 7, 32]
+            if z_config.get_diy_config().training.use_single_projection_layer:
+                x_motion_tokens_proj = self.proj_layer(x_motion_tokens).reshape(*x_motion_tokens.shape[:2], 7, 32)
+            else:
+                # 过 7 个 MLP
+                outs = [layer(x_motion_tokens) for layer in self.proj_layers]  # 每个 [B, 49, out_dim]
+                x_motion_tokens_proj = torch.stack(outs, dim=2)  # [B, 49, 7, 32]
 
         if return_motion_proj:
             return x, x_motion_tokens_proj

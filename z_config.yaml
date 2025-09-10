@@ -1,2 +1,3 @@
 training:
   use_multiview: False
+  use_single_projection_layer: True
