@@ -18,6 +18,8 @@ from diffusion.losses import normal_kl, discretized_gaussian_log_likelihood
 from data_loaders.humanml.scripts import motion_process
 from utils.loss_util import masked_l2, masked_goal_l2, clip_finetune_l2_loss
 from data_loaders.humanml.scripts.motion_process import get_target_location
+import z_config
+import torch.nn.functional as F
 
 def get_named_beta_schedule(schedule_name, num_diffusion_timesteps, scale_betas=1.):
     """
@@ -1250,7 +1252,9 @@ class GaussianDiffusion:
 
             ## !!!!现在这里的motion_output只用来做text的loss了，做和隐空间MB表示的loss是使用x_motion_proj来做的
             model_output, targets_texts, texts_len_list, x_motion_proj = model(x_start, self._scale_timesteps(t), **model_kwargs)
-
+            if z_config.get_diy_config().training.use_layernorm_to_post_process:
+                x_start = F.layer_norm(x_start, normalized_shape=(32,), weight=None, bias=None)
+                x_motion_proj = F.layer_norm(x_motion_proj, normalized_shape=(32,), weight=None, bias=None)
             target = {
                 # ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(
                 #     x_start=x_start, x_t=x_t, t=t
