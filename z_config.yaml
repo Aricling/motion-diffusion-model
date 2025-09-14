@@ -1,4 +1,5 @@
 training:
   use_multiview: False
   use_single_projection_layer: False
-  use_layernorm_to_post_process: False
+  use_layernorm_to_post_process: true  ## 在最后做loss之前加上归一化
+  use_encoder_output_wo_reparam: true

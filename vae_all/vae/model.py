@@ -4,6 +4,8 @@ import torch.nn as nn
 from vae_all.skeleton.linear import MultiLinear
 from vae_all.vae.encdec import MotionEncoder, MotionDecoder, STConvEncoder, STConvDecoder
 
+import z_config
+
 class VAE(nn.Module):
     def __init__(self, opt):
         super(VAE, self).__init__()
@@ -31,6 +33,11 @@ class VAE(nn.Module):
 
         # latent space
         x = self.dist(x)    ## 为什么需要这一层，就是为了将其映射到latent space中
+        if z_config.get_diy_config().training.use_encoder_output_wo_reparam:
+            z=x.chunk(2, dim=-1)[0]
+            loss_kl =0
+            return z, {"loss_kl": loss_kl}
+        
         mu, logvar = x.chunk(2, dim=-1)
         z = self.reparameterize(mu, logvar)
 
