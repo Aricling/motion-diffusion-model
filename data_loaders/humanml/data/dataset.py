@@ -220,6 +220,8 @@ class Text2MotionDatasetV2(data.Dataset):
         self.use_gt_MB_simplified_data=self.cfg.training.use_gt_MB_simplified_data
         if self.use_gt_MB_simplified_data:
             self.MB_simplified_data_dir = self.cfg.data.MB_simplified_data_path
+        if self.cfg.training.use_gt_vae_enc_data:
+            self.MB_data_dir = self.cfg.data.MB_original_data_path
 
         data_dict = {}
         id_list = []
@@ -355,6 +357,9 @@ class Text2MotionDatasetV2(data.Dataset):
         if self.use_gt_MB_simplified_data:
             coin2 = 'single'
             motion_token_emb=np.load(os.path.join(self.MB_simplified_data_dir, f"{key}.npy"))
+        if z_config.get_diy_config().training.use_gt_vae_enc_data:
+            coin2 = 'single'
+            motion_MB_rep = np.load(os.path.join(self.MB_data_dir, f"{key}.npy"))
 
         if coin2 == 'double':
             m_length = (m_length // self.opt.unit_length - 1) * self.opt.unit_length
@@ -368,11 +373,13 @@ class Text2MotionDatasetV2(data.Dataset):
             m_length = self.opt.fixed_len
         
         idx = random.randint(0, len(motion) - m_length)
-        if self.use_gt_MB_simplified_data:
+        if self.use_gt_MB_simplified_data or z_config.get_diy_config().training.use_gt_vae_enc_data:
             idx = 0
         if self.opt.disable_offset_aug:
             idx = random.randint(0, self.opt.unit_length)
         motion = motion[idx:idx+m_length]
+        if z_config.get_diy_config().training.use_gt_vae_enc_data:
+            motion_MB_rep = motion_MB_rep[idx:idx+m_length]
 
         "Z Normalization"
         motion = (motion - self.mean) / self.std
@@ -381,11 +388,15 @@ class Text2MotionDatasetV2(data.Dataset):
             motion = np.concatenate([motion,
                                      np.zeros((self.max_motion_length - m_length, motion.shape[1]))
                                      ], axis=0)
-        # print(word_embeddings.shape, motion.shape)
-        # print(tokens)
+            if z_config.get_diy_config().training.use_gt_vae_enc_data:
+                motion_MB_rep=np.concatenate([
+                    motion_MB_rep, np.zeros((self.max_motion_length-m_length, *motion_MB_rep.shape[1:]))
+                ])
+                motion_token_emb = motion_MB_rep
+        motion_token_emb = motion_MB_rep if z_config.get_diy_config().training.use_gt_vae_enc_data else None
 
         length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
-        if self.use_gt_MB_simplified_data:
+        if self.use_gt_MB_simplified_data or z_config.get_diy_config().training.use_gt_vae_enc_data:
             return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), motion_token_emb
         else:
             return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens)

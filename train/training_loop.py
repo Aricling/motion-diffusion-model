@@ -38,7 +38,7 @@ INITIAL_LOG_LOSS_SCALE = 20.0
 
 
 class TrainLoop:
-    def __init__(self, args, train_platform, model, diffusion, data):
+    def __init__(self, args, train_platform, model, diffusion, data, vae_model=None):
         self.args = args
         self.dataset = args.dataset
         self.train_platform = train_platform
@@ -124,11 +124,13 @@ class TrainLoop:
                 'test': lambda: eval_humanml.get_mdm_loader(self.args,
                     self.model_for_eval, diffusion, args.eval_batch_size,
                     gen_loader, mm_num_samples, mm_num_repeats, gen_loader.dataset.opt.max_motion_length,
-                    args.eval_num_samples, scale=args.gen_guidance_param,
+                    args.eval_num_samples, scale=args.gen_guidance_param, vae_model=vae_model
                 )
             }
         self.use_ddp = False
         self.ddp_model = self.model
+
+        self.vae_model = vae_model
 
     def _load_and_sync_parameters(self):
         resume_checkpoint = self.find_resume_checkpoint() or self.resume_checkpoint
@@ -323,6 +325,14 @@ class TrainLoop:
             micro_cond = cond
             last_batch = (i + self.microbatch) >= batch.shape[0]
             t, weights = self.schedule_sampler.sample(micro.shape[0], dist_util.dev())
+
+            if z_config.get_diy_config().training.use_gt_vae_enc_data:
+                MB_emb_normed=cond['y']['motion_token_emb'].to(dist_util.dev())   ## [bs, 196, 17, 512]
+                ## 这边得加上VAE
+                MB_emb_vae_downsampled, _ = self.vae_model.encode(MB_emb_normed)    ## 目前还是有加噪声的
+                micro_cond['y'].update(
+                    {'MB_vae_gt':MB_emb_vae_downsampled}
+                )
 
             compute_losses = functools.partial(
                 self.diffusion.training_losses, # 这个其实是所用的函数

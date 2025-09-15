@@ -6,6 +6,7 @@ from os.path import join as pjoin
 from tqdm import tqdm
 from utils import dist_util
 from utils.sampler_util import AutoRegressiveSampler
+import z_config
 
 
 def build_models(opt):
@@ -147,7 +148,7 @@ class CompV6GeneratedDataset(Dataset):
 
 class CompMDMGeneratedDataset(Dataset):
 
-    def __init__(self, args, model, diffusion, dataloader, mm_num_samples, mm_num_repeats, max_motion_length, num_samples_limit, scale=1.):
+    def __init__(self, args, model, diffusion, dataloader, mm_num_samples, mm_num_repeats, max_motion_length, num_samples_limit, scale=1., vae_model=None):
         self.args = args
         self.dataloader = dataloader
         self.dataset = dataloader.dataset
@@ -201,6 +202,15 @@ class CompMDMGeneratedDataset(Dataset):
                 is_mm = i in mm_idxs
                 repeat_times = mm_num_repeats if is_mm else 1
                 mm_motions = []
+
+                if z_config.get_diy_config().training.use_gt_vae_enc_data:
+                    MB_emb_normed=model_kwargs['y']['motion_token_emb'].to(dist_util.dev())   ## [bs, 196, 17, 512]
+                    ## 这边得加上VAE
+                    MB_emb_vae_downsampled, _ = vae_model.encode(MB_emb_normed)    ## 目前还是有加噪声的
+                    model_kwargs['y'].update(
+                        {'MB_vae_gt':MB_emb_vae_downsampled}
+                    )
+
                 for t in range(repeat_times):
 
                     sample = sample_fn(

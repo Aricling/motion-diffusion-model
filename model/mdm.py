@@ -349,6 +349,9 @@ class MDM(nn.Module):
                 enc_text = y['text_embed']
             else:
                 enc_text, texts_len_list, x_motion_proj, sen_emb = self.encode_text(y['text'])  ## [bs, 49, 7, 32],如果使用cls_token第二维就是29
+                if z_config.get_diy_config().training.use_gt_vae_enc_data:
+                    x_motion_proj = y['MB_vae_gt']
+                    
                 x_motion_proj_emb = self.x_motion_proj_layer(x_motion_proj.reshape(*x_motion_proj.shape[:2], -1))
                 enc_text = torch.cat((sen_emb, x_motion_proj_emb), dim=1)
                 if z_config.get_diy_config().training.use_gt_MB_simplified_data:
