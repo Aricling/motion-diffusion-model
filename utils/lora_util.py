@@ -144,7 +144,13 @@ def init_finetuned_clip_and_freeze(clip_model, clip_model_path=None):
 
     state_dict = dist_util.load_state_dict(
         clip_model_path, map_location=dist_util.dev())
-    resume_lora_checkpoint = clip_model_path.replace('model', 'lora')
+    
+    # 分离目录和文件名
+    dir_name = os.path.dirname(clip_model_path)
+    file_name = os.path.basename(clip_model_path)
+    new_file_name = file_name.replace('model', 'lora')
+    resume_lora_checkpoint = os.path.join(dir_name, new_file_name)
+
     lora_dict = dist_util.load_state_dict(
         resume_lora_checkpoint, map_location=dist_util.dev()
     )

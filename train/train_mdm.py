@@ -58,6 +58,8 @@ def main():
         print("intializing VAE model")
         vae_opt = arg_parse(True)
         vae = load_and_freeze_vae(vae_opt)
+    else:
+        vae=None
 
     print("creating data loader...")
 

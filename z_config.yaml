@@ -1,5 +1,5 @@
 model:
-  clip_model_path: save/0908_finetune_clip_all_layers_using_VAE_try1/model000450000.pt  ## ！！！关于这个clip_model的test测试我还没做
+  clip_model_path: /home/mengqing/usr/motion-diffusion-model/save/0913_finetune_clip_using_VAE_wo_reparam/model000550000.pt  ## ！！！关于这个clip_model的test测试我还没做
   # clip_model_path: save/finetune_clip_all__layers/model000450000.pt ## 这个全finetune的是loss最小的，就先用这个
   # clip_model_path: save/finetune_clip_use_multiview/model000450000.pt ## 这个是multiview的权重
   clip_use_sen_emb: True  ## 这个加了发现是很有用的，之后就用这个True
@@ -13,7 +13,7 @@ vae_model:
 
 
 training:
-  use_gt_vae_enc_data: True ## 使用gt的MotionBert emb通过VAE进行得到gt motion token
+  use_gt_vae_enc_data: False ## 使用gt的MotionBert emb通过VAE进行得到gt motion token
   use_gt_MB_simplified_data: false  ## 这个是是否直接使用gt的motion token来跑
   use_multiview_training: False ## 现在是直接使用multiview trained CLIP，这个参数好像就没什么用了
   split_info_injection: False ## 如果这个为False，下面的那个split_info_version参数就不会被用到
@@ -25,4 +25,4 @@ data:
   Temperal_further_pooling: false
   Joint_further_pooling: false
 
-overwrite_config: True  ## 一般情况下默认为False，只有resume training和debug的时候才会变成True
+overwrite_config: false  ## 一般情况下默认为False，只有resume training和debug的时候才会变成True
