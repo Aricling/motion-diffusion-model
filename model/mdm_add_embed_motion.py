@@ -6,7 +6,7 @@ import clip
 from model.rotation2xyz import Rotation2xyz
 from model.BERT.BERT_encoder import load_bert
 from utils.misc import WeightedSum
-from utils.lora_util import apply_lora_attn_mlp, init_finetuned_clip_and_freeze
+from clip.utils.lora_util import apply_lora_attn_mlp, init_finetuned_clip_and_freeze
 import z_config
 
 

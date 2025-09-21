@@ -3,20 +3,30 @@ model:
   # clip_model_path: save/finetune_clip_use_multiview/model000450000.pt ## 这个是multiview的权重
   clip_use_sen_emb: True  ## 这个加了发现是很有用的，之后就用这个True
   use_avg_clip_model: True
-  use_contronet_injection: True ## 这个置为True时，目前代码中arch一定得是encoder，decoder就不支持，也没有必要用controlnet注入
+  use_contronet_injection: false ## 这个置为True时，目前代码中arch一定得是encoder，decoder就不支持，也没有必要用controlnet注入
   # MDM_model_file: mdm_add_embed_motion
   MDM_model_file: mdm
 
+## 针对于端到端训练所采用的一些参数
+training_input:
+  use_end2end_ding_training: True ## 这个相当于这整条branch的开关，在这个git branch中，应该设置为True
+  
+  use_cls_token: False
+  not_use_cls_token: False
+  use_mean_MB_as_cls_in_gt_branch: true
+  both_use_ori_clip_cls_token: false
+  add_proj_linear_to_MB_rep: True
+
 
 training:
-  use_gt_MB_simplified_data: false  ## 这个是是否直接使用gt的motion token来跑
+  use_gt_MB_simplified_data: False  ## 这个是是否直接使用gt的motion token来跑
   use_multiview_training: False ## 现在是直接使用multiview trained CLIP，这个参数好像就没什么用了
   split_info_injection: False ## 如果这个为False，下面的那个split_info_version参数就不会被用到
   split_info_version: 2
 
 data:
-  MB_simplified_data_path: /data/mengqing/HumanML3D_MB_rep_new  ## 这个参数和上面的额use_gt_MB_simplified_data有关系，为False则不会使用
+  MB_simplified_data_path: /data/mengqing/HumanML3D_MB_rep_pooling_49  ## 这个参数和上面的额use_gt_MB_simplified_data有关系，为False则不会使用
   Temperal_further_pooling: false
   Joint_further_pooling: false
 
-overwrite_config: False  ## 一般情况下默认为False，只有resume training的时候才会变成True
+overwrite_config: True  ## 一般情况下默认为False，只有resume training的时候才会变成True

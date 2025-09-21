@@ -218,7 +218,7 @@ class Text2MotionDatasetV2(data.Dataset):
 
         self.cfg=z_config.get_diy_config()
         self.use_gt_MB_simplified_data=self.cfg.training.use_gt_MB_simplified_data
-        if self.use_gt_MB_simplified_data:
+        if self.use_gt_MB_simplified_data or z_config.get_diy_config().training_input.use_end2end_ding_training:
             self.MB_simplified_data_dir = self.cfg.data.MB_simplified_data_path
 
         data_dict = {}
@@ -245,6 +245,7 @@ class Text2MotionDatasetV2(data.Dataset):
             for name in tqdm(id_list):
                 try:
                     motion = np.load(pjoin(opt.motion_dir, name + '.npy'))
+                    motion_263 = np.load(pjoin(opt.motion_dir.replace("joints", "joint_vecs"), name + '.npy'))
                     if (len(motion)) < min_motion_len or (len(motion) >= 200):
                         continue
                     text_data = []
@@ -352,7 +353,7 @@ class Text2MotionDatasetV2(data.Dataset):
         else:
             coin2 = 'single'
 
-        if self.use_gt_MB_simplified_data:
+        if self.use_gt_MB_simplified_data or z_config.get_diy_config().training_input.use_end2end_ding_training:
             coin2 = 'single'
             motion_token_emb=np.load(os.path.join(self.MB_simplified_data_dir, f"{key}.npy"))
 
@@ -385,7 +386,7 @@ class Text2MotionDatasetV2(data.Dataset):
         # print(tokens)
 
         length = (original_length, m_length) if self.opt.fixed_len > 0 else m_length
-        if self.use_gt_MB_simplified_data:
+        if self.use_gt_MB_simplified_data or z_config.get_diy_config().training_input.use_end2end_ding_training:
             return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens), motion_token_emb
         else:
             return word_embeddings, pos_one_hots, caption, sent_len, motion, length, '_'.join(tokens)

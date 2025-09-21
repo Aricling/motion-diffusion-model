@@ -6,8 +6,9 @@ import clip
 from model.rotation2xyz import Rotation2xyz
 from model.BERT.BERT_encoder import load_bert
 from utils.misc import WeightedSum
-from utils.lora_util import apply_lora_attn_mlp, init_finetuned_clip_and_freeze
+from clip.utils.lora_util import apply_lora_attn_mlp, init_finetuned_clip_and_freeze
 import z_config
+from clip.utils.add_lora import prepare_lora_clip_model
 
 
 class MDM(nn.Module):
@@ -169,12 +170,23 @@ class MDM(nn.Module):
                 self.text_encoder_type = kargs.get('text_encoder_type', 'clip')
                 
                 if self.text_encoder_type == "clip":
-                    print('Loading CLIP...')
+                    print('Loading ori CLIP...')
                     self.clip_version = clip_version
-                    self.clip_model = self.load_ori_clip(clip_version)
-                    self.clip_model = apply_lora_attn_mlp(self.clip_model, encoder_type='text', mlp=True, attn=True)
-                    self.clip_model, self.clip_model_avg = init_finetuned_clip_and_freeze(self.clip_model)
-                    self.encode_text = self.clip_encode_text
+                    self.clip_model_ori = self.load_ori_clip(clip_version)
+                    for param in self.clip_model_ori.parameters():
+                        param.requires_grad = False     ## 参数验证已通过
+
+                    print('Loading lora CLIP...')
+                    ori_clip_model = self.load_ori_clip(clip_version)
+                    self.lra_clip_model = prepare_lora_clip_model(
+                        clip_model=ori_clip_model,
+                        use_lora=True,
+                        lora_mlp=True,
+                        lora_attn=True,
+                        num_new_tokens=3,
+                        save_dir=kargs.get("save_dir", None),
+                    )
+
                 elif self.text_encoder_type == 'bert':
                     assert self.arch == 'trans_dec'
                     # assert self.emb_trans_dec == False # passing just the time embed so it's fine
@@ -197,6 +209,34 @@ class MDM(nn.Module):
                                             self.nfeats)
 
         self.rot2xyz = Rotation2xyz(device='cpu', dataset=self.dataset)
+
+        if z_config.get_diy_config().training_input.use_end2end_ding_training:
+            ## 这里相当于第一个实验和第二个实验
+            if z_config.get_diy_config().training_input.use_cls_token:
+                self.ori_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
+                self.lra_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
+                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                    self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+                    self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+            if z_config.get_diy_config().training_input.not_use_cls_token:
+                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                    self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+                    self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+            
+            ## 这里是第三个实验
+            if z_config.get_diy_config().training_input.use_mean_MB_as_cls_in_gt_branch:
+                self.mean_motion_bert_proj = nn.Linear(self.clip_dim, self.latent_dim)
+                self.lra_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
+                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                    self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+                    self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+
+            ## 这里是第四个实验
+            if z_config.get_diy_config().training_input.both_use_ori_clip_cls_token:
+                self.ori_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
+                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                    self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+                    self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
 
     def zero_module(self, module):
         """
@@ -224,7 +264,7 @@ class MDM(nn.Module):
         else:
             return cond
 
-    def clip_encode_text(self, raw_text):
+    def lora_clip_encode_text(self, raw_text):
         # raw_text - list (batch_size length) of strings with input text prompts
         device = next(self.parameters()).device
         max_text_len = 75 if self.dataset in ['humanml', 'kit'] else None  # Specific hardcoding for humanml dataset
@@ -244,9 +284,35 @@ class MDM(nn.Module):
         texts = texts.to(device)
         texts_tokens_padded = texts_tokens_padded.to(device)
         
-        if z_config.get_diy_config().model.use_avg_clip_model:
-            return self.clip_model_avg.encode_text(texts, texts_lens_list=texts_lens_list).float(), texts_lens_list
-        return self.clip_model.encode_text(texts, texts_lens_list=texts_lens_list).float(), texts_lens_list
+        if z_config.get_diy_config().model.use_avg_clip_model:  ## 在这里lora是要被训练的，根本就没有avg这种定义
+            encoded_text = self.lra_clip_model.lora_encode_text(texts, texts_lens_list=texts_lens_list).float()    ## 这里的texts_lens_list只是为了之后提取index更加方便
+        else:
+            encoded_text = self.lra_clip_model.lora_encode_text(texts, texts_lens_list=texts_lens_list).float()
+
+        return encoded_text, texts_lens_list
+    
+    def ori_clip_encode_text(self, raw_text):
+        # raw_text - list (batch_size length) of strings with input text prompts
+        device = next(self.parameters()).device
+        max_text_len = 75 if self.dataset in ['humanml', 'kit'] else None  # Specific hardcoding for humanml dataset
+        if max_text_len is not None:
+            default_context_length = 77
+            context_length = max_text_len + 2 # start_token + 20 + end_token
+            assert context_length <= default_context_length
+            texts, texts_tokens = clip.tokenize(raw_text, context_length=context_length, truncate=True) # [bs, context_length] # if n_tokens > context_length -> will truncate
+            texts_lens_list = [len(text_token) for text_token in texts_tokens]
+            texts_tokens_padded=torch.zeros([texts.shape[0], default_context_length], dtype=texts.dtype, device=texts.device)
+            for i, text_tokens in enumerate(texts_tokens):
+                texts_tokens_padded[i, :texts_lens_list[i]] = torch.tensor(text_tokens)
+
+        else:
+            texts = clip.tokenize(raw_text, truncate=True).to(device) # [bs, context_length] # if n_tokens > 77 -> will truncate
+
+        texts_tokens_padded = texts_tokens_padded.to(device)
+        
+        ori_text_cls_emb = self.clip_model_ori.ori_encode_text(texts_tokens_padded)
+
+        return ori_text_cls_emb, texts_lens_list
     
     def bert_encode_text(self, raw_text):
         # enc_text = self.clip_model(raw_text)
@@ -306,9 +372,31 @@ class MDM(nn.Module):
                     control.append(self.zero_convs[i](xseq))
 
         return control
+    
+    def _compute_debug_losses(self, lora_enc_cls, ori_CLIP_cls_emb, lora_CLIP_MB_rep, gt_MB_rep):
+        """
+        计算调试用的特征对齐 loss（不参与梯度）
+        返回 dict: {'cls_lora_vs_clip': float, 'mb_lora_vs_gt': float}
+        """
+        debug_losses = {}
+        with torch.no_grad():
+            # 1. CLS token: LoRA vs Original CLIP
+            if lora_enc_cls.shape == ori_CLIP_cls_emb.shape:
+                cls_loss = torch.nn.functional.mse_loss(lora_enc_cls, ori_CLIP_cls_emb)
+                debug_losses['cls_lora_vs_clip'] = cls_loss.item()
+            else:
+                print(f"[WARNING] CLS Shape mismatch: lora {lora_enc_cls.shape} vs ori {ori_CLIP_cls_emb.shape}")
+                debug_losses['cls_lora_vs_clip'] = float('nan')
 
+            # 2. MB rep: LoRA vs GT
+            if lora_CLIP_MB_rep.shape == gt_MB_rep.shape:
+                mb_loss = torch.nn.functional.mse_loss(lora_CLIP_MB_rep, gt_MB_rep)
+                debug_losses['mb_lora_vs_gt'] = mb_loss.item()
+            else:
+                print(f"[WARNING] MB Shape mismatch: lora {lora_CLIP_MB_rep.shape} vs gt {gt_MB_rep.shape}")
+                debug_losses['mb_lora_vs_gt'] = float('nan')
 
-
+        return debug_losses
 
     def forward(self, x, timesteps, y=None):
         """
@@ -338,9 +426,90 @@ class MDM(nn.Module):
             if 'text_embed' in y.keys():  # caching option
                 enc_text = y['text_embed']
             else:
-                enc_text, texts_len_list = self.encode_text(y['text'])  ## [bs, 4x7, 512],如果使用cls_token第二维就是29
+                lora_enc_cls_MB, texts_len_list = self.lora_clip_encode_text(y['text'])  ## [bs, 4x7, 512],如果使用cls_token第二维就是29
+                lora_enc_cls = lora_enc_cls_MB[:,0:1,:]
+                lora_CLIP_MB_rep = lora_enc_cls_MB[:,1:,:]
+                ori_CLIP_cls_emb, _ = self.ori_clip_encode_text(y['text'])  ## 这个是普通CLIP出来的结果
+                ## 想要在这里写一个保存loss的脚本
+                
                 if z_config.get_diy_config().training.use_gt_MB_simplified_data:
-                    enc_text[:,1:,:] = y['motion_token_emb']
+                    gt_MB_rep = y['motion_token_emb']
+                    ori_CLIP_cls_emb, _ = self.ori_clip_encode_text(y['text'])
+                    enc_text = torch.cat((ori_CLIP_cls_emb, gt_MB_rep), dim=1)
+
+                if z_config.get_diy_config().training_input.use_end2end_ding_training:
+                    if y.get("eval_time", False):
+                        # eval 时，全 batch 都走 LoRA 分支
+                        gt_MB_rep = y['motion_token_emb']
+                        self.last_debug_losses = self._compute_debug_losses(
+                                    lora_enc_cls, ori_CLIP_cls_emb, lora_CLIP_MB_rep, gt_MB_rep
+                                )
+                        if z_config.get_diy_config().training_input.use_cls_token:
+                            lora_enc_cls = self.lra_clip_proj(lora_enc_cls)
+                            if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                                lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
+                            enc_text = torch.cat((lora_enc_cls, lora_CLIP_MB_rep), dim=1)
+
+                        elif z_config.get_diy_config().training_input.not_use_cls_token:
+                            if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                                lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
+                            enc_text = lora_CLIP_MB_rep
+
+                        elif z_config.get_diy_config().training_input.use_mean_MB_as_cls_in_gt_branch:
+                            lora_enc_cls = self.lra_clip_proj(lora_enc_cls)
+                            if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                                lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
+                            enc_text = torch.cat((lora_enc_cls, lora_CLIP_MB_rep), dim=1)
+
+                        elif z_config.get_diy_config().training_input.both_use_ori_clip_cls_token:
+                            ori_CLIP_cls_emb = self.ori_clip_proj(ori_CLIP_cls_emb)
+                            if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                                lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
+                            enc_text = torch.cat((ori_CLIP_cls_emb, lora_CLIP_MB_rep), dim=1)
+
+                    ## 端到端各种条件控制的实验
+                    else:
+                            gt_MB_rep = y['motion_token_emb']
+                            self.last_debug_losses = self._compute_debug_losses(
+                                    lora_enc_cls, ori_CLIP_cls_emb, lora_CLIP_MB_rep, gt_MB_rep
+                                )
+                            if z_config.get_diy_config().training_input.use_cls_token:
+                                ori_CLIP_cls_emb = self.ori_clip_proj(ori_CLIP_cls_emb)
+                                lora_enc_cls = self.lra_clip_proj(lora_enc_cls)
+                                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                                    lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
+                                    gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
+                                enc_text_sub_gt = torch.cat((ori_CLIP_cls_emb[:int(bs/2)], gt_MB_rep[:int(bs/2)]), axis=1)
+                                enc_text_sub_lora = torch.cat((lora_enc_cls[:int(bs/2)], lora_CLIP_MB_rep[:int(bs/2)]), axis=1)
+                                enc_text = torch.cat((enc_text_sub_gt, enc_text_sub_lora), dim=0)
+                            
+                            if z_config.get_diy_config().training_input.not_use_cls_token:
+                                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                                    lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
+                                    gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
+                                enc_text_sub_gt = gt_MB_rep[:int(bs/2)]
+                                enc_text_sub_lora = lora_CLIP_MB_rep[:int(bs/2)]
+                                enc_text = torch.cat((enc_text_sub_gt, enc_text_sub_lora), dim=0)
+                            
+                            if z_config.get_diy_config().training_input.use_mean_MB_as_cls_in_gt_branch:
+                                ori_CLIP_cls_emb = torch.mean(gt_MB_rep, dim=1).unsqueeze(1)
+                                lora_enc_cls = self.lra_clip_proj(lora_enc_cls)
+                                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                                    lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
+                                    gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
+                                enc_text_sub_gt = torch.cat((ori_CLIP_cls_emb[:int(bs/2)], gt_MB_rep[:int(bs/2)]), axis=1)
+                                enc_text_sub_lora = torch.cat((lora_enc_cls[:int(bs/2)], lora_CLIP_MB_rep[:int(bs/2)]), axis=1)
+                                enc_text = torch.cat((enc_text_sub_gt, enc_text_sub_lora), dim=0)
+                            
+                            if z_config.get_diy_config().training_input.both_use_ori_clip_cls_token:
+                                ori_CLIP_cls_emb = self.ori_clip_proj(ori_CLIP_cls_emb)
+                                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                                    lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
+                                    gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
+                                enc_text_sub_gt = torch.cat((ori_CLIP_cls_emb[:int(bs/2)], gt_MB_rep[:int(bs/2)]), axis=1)
+                                enc_text_sub_lora = torch.cat((ori_CLIP_cls_emb[:int(bs/2)], lora_CLIP_MB_rep[:int(bs/2)]), axis=1)
+                                enc_text = torch.cat((enc_text_sub_gt, enc_text_sub_lora), dim=0)
+
                 
                 ## 是否进一步pooling的对比实验
                 if any([z_config.get_diy_config().data.Temperal_further_pooling, z_config.get_diy_config().data.Joint_further_pooling]):
@@ -362,6 +531,7 @@ class MDM(nn.Module):
                 enc_text, text_mask = enc_text
                 if text_mask.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
                     text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
+            ## 这里是有一个text的映射！！！得注意一下
             text_emb = self.embed_text(self.mask_cond(enc_text, force_mask=force_mask))  # casting mask for the single-prompt-for-all case
             if self.emb_policy == 'add':
                 emb = text_emb.permute(1,0,2).contiguous() + time_emb
@@ -501,7 +671,10 @@ class MDM(nn.Module):
             y['mask'] = y['mask'][..., self.context_len:]
         
         output = self.output_process(output)  # [bs, njoints, nfeats, nframes]
-        return output
+        if z_config.get_diy_config().training_input.use_end2end_ding_training:
+             return output, self.last_debug_losses
+        else:
+            return output
 
 
     def _apply(self, fn):

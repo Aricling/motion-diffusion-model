@@ -16,7 +16,7 @@ from copy import deepcopy
 from diffusion.nn import mean_flat, sum_flat
 from diffusion.losses import normal_kl, discretized_gaussian_log_likelihood
 from data_loaders.humanml.scripts import motion_process
-from utils.loss_util import masked_l2, masked_goal_l2
+from utils.loss_util import masked_l2, masked_goal_l2, compute_split_batch_loss
 from data_loaders.humanml.scripts.motion_process import get_target_location
 import z_config
 
@@ -631,11 +631,12 @@ class GaussianDiffusion:
         if dump_steps is not None:
             dump = []
 
-        if 'text' in model_kwargs['y'].keys():
-            # encoding once instead of each iteration saves lots of time, 但是其实就是针对num_repeats这个参数来制定的，如果其只repeat 1次，就没有什么用
-            model_kwargs['y']['text_embed'], model_kwargs['y']['texts_len_list'] = model.encode_text(model_kwargs['y']['text'])
-            if z_config.get_diy_config().training.use_gt_MB_simplified_data:
-                model_kwargs['y']['text_embed'][:,1:,:]=model_kwargs['y']['motion_token_emb']
+        # if 'text' in model_kwargs['y'].keys():
+        #     # encoding once instead of each iteration saves lots of time, 但是其实就是针对num_repeats这个参数来制定的，如果其只repeat 1次，就没有什么用
+        #     model_kwargs['y']['text_embed'], model_kwargs['y']['texts_len_list'] = model.encode_text(model_kwargs['y']['text'])
+        #     if z_config.get_diy_config().training.use_gt_MB_simplified_data:
+        #         model_kwargs['y']['text_embed'][:,1:,:]=model_kwargs['y']['motion_token_emb']
+        model_kwargs['y']['eval_time']=True
         
         for i, sample in enumerate(self.p_sample_loop_progressive(
             model,
@@ -1267,8 +1268,12 @@ class GaussianDiffusion:
             if self.loss_type == LossType.RESCALED_KL:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
-
+            if z_config.get_diy_config().training_input.use_end2end_ding_training:
+                model_output, debug_losses = model(x_t, self._scale_timesteps(t), **model_kwargs)
+                terms.update(debug_losses)
+            else:
+                model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
+                
             if self.model_var_type in [
                 ModelVarType.LEARNED,
                 ModelVarType.LEARNED_RANGE,
@@ -1301,6 +1306,7 @@ class GaussianDiffusion:
             assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
 
             terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
+            terms["loss_front_val"], terms["loss_back_val"] = compute_split_batch_loss(target, model_output, mask, split_size=32)
 
             target_xyz, model_output_xyz = None, None
 

@@ -344,7 +344,7 @@ class CLIP(nn.Module):
     def encode_image(self, image):
         return self.visual(image.type(self.dtype))
 
-    def encode_text(self, text, token_projection=True, texts_lens_list=None, return_sen_emb=None):
+    def lora_encode_text(self, text, token_projection=True, texts_lens_list=None, return_sen_emb=None):
         return_sen_emb=z_config.get_diy_config().model.clip_use_sen_emb
 
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
@@ -384,6 +384,22 @@ class CLIP(nn.Module):
                 return torch.cat([sen_emb, x_motion_tokens_proj],dim=1)
 
         return x_motion_tokens_proj  # shape: [batch_size, n_ctx, dim]
+    
+    def ori_encode_text(self, text, token_projection=True, texts_lens_list=None, return_sen_emb=None):
+        return_sen_emb=z_config.get_diy_config().model.clip_use_sen_emb
+
+        x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
+        x = x + self.positional_embedding.type(self.dtype)
+        x = x.permute(1, 0, 2)  # [n_ctx, batch_size, dim]
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # [batch_size, n_ctx, dim]
+        x = self.ln_final(x).type(self.dtype)
+
+        eos_token_id = 49407
+        eos_positions = (text == eos_token_id).float().argmax(dim=1)  # shape: [batch_size]
+        sen_emb = (x[torch.arange(x.shape[0]), eos_positions] @ self.text_projection).unsqueeze(1)
+
+        return sen_emb
 
 
     def forward(self, image, text):

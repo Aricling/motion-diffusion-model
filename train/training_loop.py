@@ -29,6 +29,7 @@ from utils.sampler_util import ClassifierFreeSampleModel
 
 from torch.amp import autocast, GradScaler
 import z_config
+import loratorch as lora
 
 
 # For ImageNet experiments, this was a good default value.
@@ -142,13 +143,25 @@ class TrainLoop:
             logger.log(f"loading model from checkpoint: {resume_checkpoint}...")
             state_dict = dist_util.load_state_dict(
                 resume_checkpoint, map_location=dist_util.dev())
+            resume_lora = resume_checkpoint.replace("model", "lora")
+            lora_dict = dist_util.load_state_dict(
+                resume_lora, map_location=dist_util.dev()
+            )
 
             if 'model_avg' in state_dict:
                 print('loading both model and model_avg')
                 state_dict, state_dict_avg = state_dict['model'], state_dict[
                     'model_avg']
-                load_model_wo_clip(self.model, state_dict)
-                load_model_wo_clip(self.model_avg, state_dict_avg)
+                lora_dict, lora_dict_avg = lora_dict['lora'], lora_dict['lora_avg']
+                missing_keys = load_model_wo_clip(self.model, state_dict)
+                missing_keys_lora, unexpected_keys_lora = self.model.load_state_dict(lora_dict, strict=False)
+                assert len(unexpected_keys_lora)==0
+                # still_missing = set(missing_keys) & set(missing_keys_lora)    ## 这里是之前打开来验证的，发现应该没有什么问题
+                # print("Still missing keys:", list(still_missing))
+
+                missing_keys = load_model_wo_clip(self.model_avg, state_dict_avg)
+                missing_keys_lora, unexpected_keys_lora = self.model_avg.load_state_dict(lora_dict, strict=False)
+                assert len(unexpected_keys_lora)==0
             else:
                 load_model_wo_clip(self.model, state_dict)
                 if self.args.use_ema:
@@ -346,9 +359,15 @@ class TrainLoop:
                 )
 
             loss = (losses["loss"] * weights).mean()
-            log_loss_dict(
-                self.diffusion, t, {k: v * weights for k, v in losses.items()}
-            )
+            # log_loss_dict(
+            #     self.diffusion, t, {k: v * weights for k, v in losses.items()}
+            # )
+            log_dict = {
+                k: v * weights if torch.is_tensor(v) and v.shape == weights.shape else torch.tensor(v, device=weights.device) if isinstance(v, (float, int)) else v
+                for k, v in losses.items()
+            }
+            log_loss_dict(self.diffusion, t, log_dict)
+            
             self.mp_trainer.backward(loss, self.scaler)
 
     def _anneal_lr(self):
@@ -436,19 +455,28 @@ class TrainLoop:
             else:
                 # state_dict = self.mp_trainer.master_params_to_state_dict(
                 #     self.mp_trainer.master_params)
-                state_dict = self.model.state_dict()
-            del_clip(state_dict)
+                model_dict = self.model.state_dict()
+                model_lora_dict = lora.lora_state_dict(self.model)
+                filtered_model_dict={k: v for k, v in model_dict.items() if k not in model_lora_dict}
+            del_clip(filtered_model_dict)
 
             if self.args.use_ema:
                 # save both the model and the average model
-                state_dict_avg = self.model_avg.state_dict()
-                del_clip(state_dict_avg)
-                state_dict = {'model': state_dict, 'model_avg': state_dict_avg}
+                model_avg_dict = self.model_avg.state_dict()
+                model_avg_lora_dict=lora.lora_state_dict(self.model_avg)
+                filtered_model_avg_dict={k: v for k, v in model_avg_dict.items() if k not in model_avg_lora_dict}
+                del_clip(filtered_model_avg_dict)
+                state_dict = {'model': filtered_model_dict, 'model_avg': filtered_model_avg_dict}
+                state_dict_lora = {'lora': model_lora_dict, 'lora_avg': model_avg_lora_dict}
 
             logger.log(f"saving model...")
             filename = self.ckpt_file_name()
+            filename_lora = filename.replace('model', 'lora')
             with bf.BlobFile(bf.join(self.save_dir, filename), "wb") as f:
                 torch.save(state_dict, f)
+            logger.log(f"saving LoRA parameters...")
+            with bf.BlobFile(bf.join(self.save_dir, filename_lora), "wb") as f:
+                torch.save(state_dict_lora, f)
 
         save_checkpoint()
 
@@ -491,8 +519,34 @@ def get_blob_logdir():
 
 def log_loss_dict(diffusion, ts, losses):
     for key, values in losses.items():
-        logger.logkv_mean(key, values.mean().item())
-        # Log the quantiles (four quartiles, in particular).
-        for sub_t, sub_loss in zip(ts.cpu().numpy(), values.detach().cpu().numpy()):
-            quartile = int(4 * sub_t / diffusion.num_timesteps)
-            logger.logkv_mean(f"{key}_q{quartile}", sub_loss)
+        if torch.is_tensor(values):
+            np_values = values.detach().cpu().numpy()
+            if np_values.ndim == 0:  # scalar tensor, e.g., torch.tensor(1.23)
+                scalar_val = float(np_values)
+                logger.logkv_mean(key, scalar_val)
+                # 对于标量，quartile 无意义，跳过或统一记到 q0？
+                # 可选：logger.logkv_mean(f"{key}_q0", scalar_val)
+            else:  # array-like, shape [bs]
+                # 1. 记录每个样本在具体 timestep 的值（可选，如果 logger 支持大量 key）
+                # for sub_t, sub_loss in zip(ts.cpu().numpy(), np_values):
+                #     logger.logkv(f"{key}_t{sub_t}", sub_loss)
+
+                # 2. 记录按 quartile 分组的均值（保留原功能！）
+                quartile_losses = [[] for _ in range(4)]
+                for sub_t, sub_loss in zip(ts.cpu().numpy(), np_values):
+                    quartile = int(4 * sub_t / diffusion.num_timesteps)
+                    if quartile >= 4:  # 边界保护
+                        quartile = 3
+                    quartile_losses[quartile].append(sub_loss)
+
+                for q, q_losses in enumerate(quartile_losses):
+                    if len(q_losses) > 0:
+                        logger.logkv_mean(f"{key}_q{q}", np.mean(q_losses))
+
+                # 3. 记录整体均值
+                logger.logkv_mean(key, np_values.mean())
+        else:  # Python scalar: float, int
+            scalar_val = float(values)
+            logger.logkv_mean(key, scalar_val)
+            # 可选：也记到 q0
+            # logger.logkv_mean(f"{key}_q0", scalar_val)

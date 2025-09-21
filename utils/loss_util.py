@@ -30,7 +30,24 @@ def masked_l2(a, b, mask, loss_fn=diff_l2, epsilon=1e-8, entries_norm=True):
     # print('mse_loss_val', mse_loss_val)
     return mse_loss_val
 
+def compute_split_batch_loss(target, model_output, mask, split_size=32):
+    with torch.no_grad():
+        assert target.size(0) == 2 * split_size, f"Expected batch size {2*split_size}, got {target.size(0)}"
+        
+        # Split
+        t1, t2 = target.split(split_size, dim=0)
+        o1, o2 = model_output.split(split_size, dim=0)
+        m1, m2 = mask.split(split_size, dim=0)
 
+         # Compute per-sample losses
+        l1_per_sample = masked_l2(t1, o1, m1)  # shape: [32]
+        l2_per_sample = masked_l2(t2, o2, m2)  # shape: [32]
+
+        # 对每个 split 内部求平均 → 得到标量
+        l1_mean = l1_per_sample.mean()
+        l2_mean = l2_per_sample.mean()
+
+        return l1_mean.item(), l2_mean.item()
 def masked_goal_l2(pred_goal, ref_goal, cond, all_goal_joint_names):
     all_goal_joint_names_w_traj = np.append(all_goal_joint_names, 'traj')
     target_joint_idx = [[np.where(all_goal_joint_names_w_traj == j)[0][0] for j in sample_joints] for sample_joints in cond['target_joint_names']]
