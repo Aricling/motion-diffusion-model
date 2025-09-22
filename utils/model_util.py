@@ -5,6 +5,7 @@ from utils.parser_util import get_cond_mode
 from data_loaders.humanml_utils import HML_EE_JOINT_NAMES
 import importlib
 import z_config
+from utils import dist_util
 
 def load_model_wo_clip(model, state_dict):
     # assert (state_dict['sequence_pos_encoder.pe'][:model.sequence_pos_encoder.pe.shape[0]] == model.sequence_pos_encoder.pe).all()  # TEST
@@ -133,18 +134,72 @@ def create_gaussian_diffusion(args):
         lambda_target_loc=lambda_target_loc,
     )
 
-def load_saved_model(model, model_path, use_avg: bool=False):  # use_avg_model
-    state_dict = torch.load(model_path, map_location='cpu')
-    # Use average model when possible
-    if use_avg and 'model_avg' in state_dict.keys():
-    # if use_avg_model:
-        print('loading avg model')
-        state_dict = state_dict['model_avg']
+# def load_saved_model(model, model_path, use_avg: bool=False):  # use_avg_model
+#     state_dict = torch.load(model_path, map_location='cpu')
+#     # Use average model when possible
+#     if use_avg and 'model_avg' in state_dict.keys():
+#     # if use_avg_model:
+#         print('loading avg model')
+#         state_dict = state_dict['model_avg']
+#     else:
+#         if 'model' in state_dict:
+#             print('loading model without avg')
+#             state_dict = state_dict['model']
+#         else:
+#             print('checkpoint has no avg model, loading as usual.')
+#     load_model_wo_clip(model, state_dict)
+#     return model
+
+def load_model_with_lora(model, ckpt_path, use_ema=False):
+    """
+    加载模型权重和对应的 LoRA 权重到指定的 model。
+    
+    Args:
+        model: 要加载权重的目标模型
+        ckpt_path (str): 主模型 checkpoint 路径 (e.g., ".../modelXXXX.pt")
+        use_ema (bool): 是否加载 EMA 权重（默认 False）
+
+    Returns:
+        None
+    """
+    import os
+
+    # 加载 state dict
+    state_dict = dist_util.load_state_dict(ckpt_path, map_location=dist_util.dev())
+
+    # 推导 lora 路径
+    lora_path = 'lora'.join(ckpt_path.rsplit('model', 1))
+    if not os.path.exists(lora_path):
+        raise FileNotFoundError(f"对应的 LoRA 权重文件不存在: {lora_path}")
+    lora_dict = dist_util.load_state_dict(lora_path, map_location=dist_util.dev())
+
+    if "model_avg" in state_dict:
+        print("Loading both model and model_avg ...")
+
+        # 拆分主模型和 avg
+        state_dict_main, state_dict_avg = state_dict["model"], state_dict["model_avg"]
+        lora_dict_main, lora_dict_avg = lora_dict["lora"], lora_dict["lora_avg"]
+
+        # 加载主模型权重
+        missing_keys_0 = load_model_wo_clip(model, state_dict_main)
+        missing_keys_lora_0, unexpected_keys_lora_0 = model.load_state_dict(lora_dict_main, strict=False)
+        assert len(unexpected_keys_lora_0) == 0
+
+        # 如果需要的话加载 avg 权重（覆盖 model 当前参数）
+        if use_ema:
+            print("Replacing model with EMA weights ...")
+            missing_keys_1 = load_model_wo_clip(model, state_dict_avg)
+            missing_keys_lora_1, unexpected_keys_lora_1 = model.load_state_dict(lora_dict_avg, strict=False)
+            assert len(unexpected_keys_lora_1) == 0
+
     else:
-        if 'model' in state_dict:
-            print('loading model without avg')
-            state_dict = state_dict['model']
-        else:
-            print('checkpoint has no avg model, loading as usual.')
-    load_model_wo_clip(model, state_dict)
-    return model
+        print("Loading model (no model_avg found in checkpoint) ...")
+        missing_keys = load_model_wo_clip(model, state_dict)
+
+        # LoRA 权重
+        missing_keys_lora, unexpected_keys_lora = model.load_state_dict(lora_dict, strict=False)
+        assert len(unexpected_keys_lora) == 0
+
+        # 如果需要 EMA，但 checkpoint 没有，直接复制一份普通模型参数
+        if use_ema:
+            print("Using model parameters as EMA (legacy checkpoint).")

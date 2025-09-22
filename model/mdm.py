@@ -9,7 +9,7 @@ from utils.misc import WeightedSum
 from clip.utils.lora_util import apply_lora_attn_mlp, init_finetuned_clip_and_freeze
 import z_config
 from clip.utils.add_lora import prepare_lora_clip_model
-
+import contextlib
 
 class MDM(nn.Module):
     def __init__(self, modeltype, njoints, nfeats, num_actions, translation, pose_rep, glob, glob_rot,
@@ -373,30 +373,83 @@ class MDM(nn.Module):
 
         return control
     
-    def _compute_debug_losses(self, lora_enc_cls, ori_CLIP_cls_emb, lora_CLIP_MB_rep, gt_MB_rep):
+    def _compute_debug_losses(
+        self,
+        lora_enc_cls,
+        ori_CLIP_cls_emb,
+        lora_CLIP_MB_rep,
+        gt_MB_rep,
+        motion_lens_list,
+    ):
         """
-        计算调试用的特征对齐 loss（不参与梯度）
-        返回 dict: {'cls_lora_vs_clip': float, 'mb_lora_vs_gt': float}
+        计算调试用的特征对齐 loss。
+        - 如果 cls_and_MB_extra_supervision_loss = True，返回可梯度回传的 tensor；
+        - 否则返回 float 值（.item()），仅用于监控。
         """
+        device = lora_enc_cls.device
+        motion_lens_tensor = motion_lens_list.detach().clone().to(device)
         debug_losses = {}
-        with torch.no_grad():
+
+        use_supervision_loss = z_config.get_diy_config().training_input.cls_and_MB_extra_supervision_loss
+        ctx = torch.no_grad() if not use_supervision_loss else contextlib.nullcontext()
+
+        def _finalize_loss(loss_value):
+            """根据模式返回 tensor 或 float"""
+            return loss_value if use_supervision_loss else loss_value.item()
+
+        def _zero_loss_like(x):
+            """返回一个 0 loss（支持梯度回传）"""
+            return torch.tensor(0.0, device=x.device, requires_grad=True)
+
+        with ctx:
+            # -------------------------------------------------
             # 1. CLS token: LoRA vs Original CLIP
+            # -------------------------------------------------
             if lora_enc_cls.shape == ori_CLIP_cls_emb.shape:
                 cls_loss = torch.nn.functional.mse_loss(lora_enc_cls, ori_CLIP_cls_emb)
-                debug_losses['cls_lora_vs_clip'] = cls_loss.item()
+                debug_losses["cls_lora_vs_clip"] = _finalize_loss(cls_loss)
             else:
                 print(f"[WARNING] CLS Shape mismatch: lora {lora_enc_cls.shape} vs ori {ori_CLIP_cls_emb.shape}")
-                debug_losses['cls_lora_vs_clip'] = float('nan')
+                debug_losses["cls_lora_vs_clip"] = _zero_loss_like(lora_enc_cls) if use_supervision_loss else float("nan")
 
+            # -------------------------------------------------
             # 2. MB rep: LoRA vs GT
+            # -------------------------------------------------
             if lora_CLIP_MB_rep.shape == gt_MB_rep.shape:
-                mb_loss = torch.nn.functional.mse_loss(lora_CLIP_MB_rep, gt_MB_rep)
-                debug_losses['mb_lora_vs_gt'] = mb_loss.item()
+                B, T, D = lora_CLIP_MB_rep.shape
+
+                # 构造 motion mask [B, 28, D]
+                frame_group_count, frames_per_group, tokens_per_group = 4, 49, 7
+                fuse_mask_4 = (
+                    motion_lens_tensor.view(-1, 1) >= torch.arange(1, frame_group_count + 1, device=device) * frames_per_group
+                )  # [B, 4]
+                motion_mask = (
+                    fuse_mask_4.unsqueeze(-1)
+                    .expand(-1, -1, tokens_per_group)
+                    .reshape(B, 28)
+                    .unsqueeze(-1)
+                    .expand(B, 28, D)
+                    .float()
+                )
+
+                # 逐元素 MSE 并应用 mask
+                elementwise_loss = (lora_CLIP_MB_rep - gt_MB_rep) ** 2
+                masked_loss = elementwise_loss * motion_mask
+
+                # 归一化
+                num_valid_elements = motion_mask.sum()
+                if num_valid_elements > 0:
+                    mb_loss = masked_loss.sum() / num_valid_elements
+                else:
+                    mb_loss = _zero_loss_like(lora_CLIP_MB_rep)
+
+                debug_losses["mb_lora_vs_gt"] = _finalize_loss(mb_loss)
             else:
                 print(f"[WARNING] MB Shape mismatch: lora {lora_CLIP_MB_rep.shape} vs gt {gt_MB_rep.shape}")
-                debug_losses['mb_lora_vs_gt'] = float('nan')
+                debug_losses["mb_lora_vs_gt"] = _zero_loss_like(lora_CLIP_MB_rep) if use_supervision_loss else float("nan")
 
         return debug_losses
+
 
     def forward(self, x, timesteps, y=None):
         """
@@ -423,92 +476,93 @@ class MDM(nn.Module):
 
         force_mask = y.get('uncond', False)
         if 'text' in self.cond_mode:
-            if 'text_embed' in y.keys():  # caching option
+            if 'text_embed' in y:  # caching option
                 enc_text = y['text_embed']
             else:
-                lora_enc_cls_MB, texts_len_list = self.lora_clip_encode_text(y['text'])  ## [bs, 4x7, 512],如果使用cls_token第二维就是29
-                lora_enc_cls = lora_enc_cls_MB[:,0:1,:]
-                lora_CLIP_MB_rep = lora_enc_cls_MB[:,1:,:]
-                ori_CLIP_cls_emb, _ = self.ori_clip_encode_text(y['text'])  ## 这个是普通CLIP出来的结果
-                ## 想要在这里写一个保存loss的脚本
-                
+                # ----- 编码 text -----
+                lora_enc_cls_MB, texts_len_list = self.lora_clip_encode_text(y['text'])  # [bs, 29, 512]
+                lora_enc_cls = lora_enc_cls_MB[:, :1, :]
+                lora_CLIP_MB_rep = lora_enc_cls_MB[:, 1:, :]
+                ori_CLIP_cls_emb, _ = self.ori_clip_encode_text(y['text'])
+
+                # ----- 保存 loss -----
+                gt_MB_rep = y.get('motion_token_emb', None)
+                if gt_MB_rep is not None:
+                    self.last_debug_losses = self._compute_debug_losses(
+                        lora_enc_cls, ori_CLIP_cls_emb, lora_CLIP_MB_rep, gt_MB_rep, y['lengths']
+                    )
+
+                # ----- simplified data 模式 -----
                 if z_config.get_diy_config().training.use_gt_MB_simplified_data:
-                    gt_MB_rep = y['motion_token_emb']
-                    ori_CLIP_cls_emb, _ = self.ori_clip_encode_text(y['text'])
                     enc_text = torch.cat((ori_CLIP_cls_emb, gt_MB_rep), dim=1)
 
+                # ----- end2end 训练 -----
                 if z_config.get_diy_config().training_input.use_end2end_ding_training:
-                    if y.get("eval_time", False):
-                        # eval 时，全 batch 都走 LoRA 分支
-                        gt_MB_rep = y['motion_token_emb']
-                        self.last_debug_losses = self._compute_debug_losses(
-                                    lora_enc_cls, ori_CLIP_cls_emb, lora_CLIP_MB_rep, gt_MB_rep
-                                )
+                    eval_time = y.get("eval_time", False)
+                    bs = lora_enc_cls.shape[0]
+
+                    # --- proj 操作（按需应用）---
+                    if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                        lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
+                        if gt_MB_rep is not None:
+                            gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
+
+                    def _build_enc_text(mode):
+                        """
+                        mode: "eval" / "train"
+                        """
                         if z_config.get_diy_config().training_input.use_cls_token:
-                            lora_enc_cls = self.lra_clip_proj(lora_enc_cls)
-                            if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                                lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
-                            enc_text = torch.cat((lora_enc_cls, lora_CLIP_MB_rep), dim=1)
+                            # cls token
+                            lora_enc_proj = self.lra_clip_proj(lora_enc_cls)
+                            ori_cls_proj = self.ori_clip_proj(ori_CLIP_cls_emb)
+
+                            if mode == "eval":
+                                test_gt_input = False   ## 这边就是测试使用另外一条支路来构建条件咯
+                                if test_gt_input == True:
+                                    return torch.cat((ori_cls_proj, gt_MB_rep), dim=1)
+                                return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim=1)
+                            else:  # train: 一半gt一半lora
+                                if z_config.get_diy_config().training_input.all_batch_using_lora_clip_out:
+                                    return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim = 1)
+                                else:
+                                    enc_gt = torch.cat((ori_cls_proj[:bs // 2], gt_MB_rep[:bs // 2]), dim=1)
+                                    enc_lora = torch.cat((lora_enc_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
+                                return torch.cat((enc_gt, enc_lora), dim=0)
 
                         elif z_config.get_diy_config().training_input.not_use_cls_token:
-                            if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                                lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
-                            enc_text = lora_CLIP_MB_rep
+                            if mode == "eval":
+                                return lora_CLIP_MB_rep
+                            else:
+                                enc_gt = gt_MB_rep[:bs // 2]
+                                enc_lora = lora_CLIP_MB_rep[:bs // 2]
+                                return torch.cat((enc_gt, enc_lora), dim=0)
 
                         elif z_config.get_diy_config().training_input.use_mean_MB_as_cls_in_gt_branch:
-                            lora_enc_cls = self.lra_clip_proj(lora_enc_cls)
-                            if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                                lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
-                            enc_text = torch.cat((lora_enc_cls, lora_CLIP_MB_rep), dim=1)
+                            lora_enc_proj = self.lra_clip_proj(lora_enc_cls)
+                            mean_cls_gt = torch.mean(gt_MB_rep, dim=1, keepdim=True)
+
+                            if mode == "eval":
+                                return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim=1)
+                            else:
+                                enc_gt = torch.cat((mean_cls_gt[:bs // 2], gt_MB_rep[:bs // 2]), dim=1)
+                                enc_lora = torch.cat((lora_enc_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
+                                return torch.cat((enc_gt, enc_lora), dim=0)
 
                         elif z_config.get_diy_config().training_input.both_use_ori_clip_cls_token:
-                            ori_CLIP_cls_emb = self.ori_clip_proj(ori_CLIP_cls_emb)
-                            if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                                lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
-                            enc_text = torch.cat((ori_CLIP_cls_emb, lora_CLIP_MB_rep), dim=1)
+                            ori_cls_proj = self.ori_clip_proj(ori_CLIP_cls_emb)
 
-                    ## 端到端各种条件控制的实验
-                    else:
-                            gt_MB_rep = y['motion_token_emb']
-                            self.last_debug_losses = self._compute_debug_losses(
-                                    lora_enc_cls, ori_CLIP_cls_emb, lora_CLIP_MB_rep, gt_MB_rep
-                                )
-                            if z_config.get_diy_config().training_input.use_cls_token:
-                                ori_CLIP_cls_emb = self.ori_clip_proj(ori_CLIP_cls_emb)
-                                lora_enc_cls = self.lra_clip_proj(lora_enc_cls)
-                                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                                    lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
-                                    gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
-                                enc_text_sub_gt = torch.cat((ori_CLIP_cls_emb[:int(bs/2)], gt_MB_rep[:int(bs/2)]), axis=1)
-                                enc_text_sub_lora = torch.cat((lora_enc_cls[:int(bs/2)], lora_CLIP_MB_rep[:int(bs/2)]), axis=1)
-                                enc_text = torch.cat((enc_text_sub_gt, enc_text_sub_lora), dim=0)
-                            
-                            if z_config.get_diy_config().training_input.not_use_cls_token:
-                                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                                    lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
-                                    gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
-                                enc_text_sub_gt = gt_MB_rep[:int(bs/2)]
-                                enc_text_sub_lora = lora_CLIP_MB_rep[:int(bs/2)]
-                                enc_text = torch.cat((enc_text_sub_gt, enc_text_sub_lora), dim=0)
-                            
-                            if z_config.get_diy_config().training_input.use_mean_MB_as_cls_in_gt_branch:
-                                ori_CLIP_cls_emb = torch.mean(gt_MB_rep, dim=1).unsqueeze(1)
-                                lora_enc_cls = self.lra_clip_proj(lora_enc_cls)
-                                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                                    lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
-                                    gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
-                                enc_text_sub_gt = torch.cat((ori_CLIP_cls_emb[:int(bs/2)], gt_MB_rep[:int(bs/2)]), axis=1)
-                                enc_text_sub_lora = torch.cat((lora_enc_cls[:int(bs/2)], lora_CLIP_MB_rep[:int(bs/2)]), axis=1)
-                                enc_text = torch.cat((enc_text_sub_gt, enc_text_sub_lora), dim=0)
-                            
-                            if z_config.get_diy_config().training_input.both_use_ori_clip_cls_token:
-                                ori_CLIP_cls_emb = self.ori_clip_proj(ori_CLIP_cls_emb)
-                                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                                    lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
-                                    gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
-                                enc_text_sub_gt = torch.cat((ori_CLIP_cls_emb[:int(bs/2)], gt_MB_rep[:int(bs/2)]), axis=1)
-                                enc_text_sub_lora = torch.cat((ori_CLIP_cls_emb[:int(bs/2)], lora_CLIP_MB_rep[:int(bs/2)]), axis=1)
-                                enc_text = torch.cat((enc_text_sub_gt, enc_text_sub_lora), dim=0)
+                            if mode == "eval":
+                                return torch.cat((ori_cls_proj, lora_CLIP_MB_rep), dim=1)
+                            else:
+                                enc_gt = torch.cat((ori_cls_proj[:bs // 2], gt_MB_rep[:bs // 2]), dim=1)
+                                enc_lora = torch.cat((ori_cls_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
+                                return torch.cat((enc_gt, enc_lora), dim=0)
+
+                        else:
+                            raise ValueError("Invalid training_input config")
+
+                    # ---- 根据 eval/train 选择拼接方式 ----
+                    enc_text = _build_enc_text("eval" if eval_time else "train")
 
                 
                 ## 是否进一步pooling的对比实验

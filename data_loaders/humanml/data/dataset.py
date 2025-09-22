@@ -801,13 +801,13 @@ class HumanML3D(data.Dataset):
             self.std = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_std.npy'))
         elif mode in ['train', 'eval', 'text_only']:
             # used by our models
-            self.mean = np.load(pjoin(opt.data_root, 'Mean.npy'))
+            self.mean = np.load(pjoin(opt.data_root, 'Mean.npy'))   ## ./dataset/HumanML3D
             self.std = np.load(pjoin(opt.data_root, 'Std.npy'))
 
         if mode == 'eval':
             # used by T2M models (including evaluators)
             # this is to translate their norms to ours
-            self.mean_for_eval = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_mean.npy'))
+            self.mean_for_eval = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_mean.npy'))   ## ./dataset
             self.std_for_eval = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_std.npy'))
 
         self.split_file = pjoin(opt.data_root, f'{split}.txt')

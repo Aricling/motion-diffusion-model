@@ -7,7 +7,7 @@ from data_loaders.humanml.networks.evaluator_wrapper import EvaluatorMDMWrapper
 from collections import OrderedDict
 from data_loaders.humanml.scripts.motion_process import *
 from data_loaders.humanml.utils.utils import *
-from utils.model_util import create_model_and_diffusion, load_saved_model
+from utils.model_util import create_model_and_diffusion, load_model_with_lora
 
 from diffusion import logger
 from utils import dist_util
@@ -316,7 +316,7 @@ if __name__ == '__main__':
     model, diffusion = create_model_and_diffusion(args, gen_loader)
 
     logger.log(f"Loading checkpoints from [{args.model_path}]...")
-    load_saved_model(model, args.model_path, use_avg=args.use_ema)
+    load_model_with_lora(model, args.model_path, use_ema=args.use_ema)
 
     if args.guidance_param != 1:
         model = ClassifierFreeSampleModel(model)   # wrapping model with the classifier-free sampler

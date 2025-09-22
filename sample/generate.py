@@ -8,7 +8,7 @@ import os
 import numpy as np
 import torch
 from utils.parser_util import generate_args
-from utils.model_util import create_model_and_diffusion, load_saved_model
+from utils.model_util import create_model_and_diffusion, load_model_with_lora
 from utils import dist_util
 from utils.sampler_util import ClassifierFreeSampleModel, AutoRegressiveSampler
 from data_loaders.get_data import get_dataset_loader
@@ -88,7 +88,7 @@ def main(args=None):
         sample_fn = sample_cls.sample
 
     print(f"Loading checkpoints from [{args.model_path}]...")
-    load_saved_model(model, args.model_path, use_avg=args.use_ema)
+    load_model_with_lora(model, args.model_path, use_avg=args.use_ema)
 
     if args.guidance_param != 1:
         model = ClassifierFreeSampleModel(model)   # wrapping model with the classifier-free sampler

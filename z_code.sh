@@ -1,14 +1,14 @@
 ## 训练代码
 # 以微调的CLIP来训练MDM，启动代码，并且加上了在训练的时候验证
 python -m train.train_mdm \
-    --save_dir save_end2end_training/0919_train_mdm_clip49_gt_cls+MB \
+    --save_dir save_end2end_training/0921_train_mdm_clip49_add_extra_supervision_loss_full_batch_lora_out \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \
     --text_encoder_type clip \
     --mask_frames \
     --use_ema \
-    --device 0 \
+    --device 1 \
     --overwrite \
     --train_platform_type WandBPlatform \
     --eval_during_training

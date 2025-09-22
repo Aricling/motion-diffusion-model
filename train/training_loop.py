@@ -357,8 +357,12 @@ class TrainLoop:
                 self.schedule_sampler.update_with_local_losses(
                     t, losses["loss"].detach()
                 )
-
-            loss = (losses["loss"] * weights).mean()
+            if z_config.get_diy_config().training_input.cls_and_MB_extra_supervision_loss:
+                loss = (losses["loss"] * weights).mean() + \
+                            (0.5 * losses.get('cls_lora_vs_clip', 0.)) + \
+                            (0.5 * losses.get('mb_lora_vs_gt', 0.))
+            else:
+                loss = (losses["loss"] * weights).mean()
             # log_loss_dict(
             #     self.diffusion, t, {k: v * weights for k, v in losses.items()}
             # )
