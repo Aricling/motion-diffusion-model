@@ -24,7 +24,7 @@ if version.parse(torch.__version__) < version.parse("1.7.1"):
     warnings.warn("PyTorch version 1.7.1 or higher is recommended")
 
 
-__all__ = ["available_models", "load", "tokenize"]
+__all__ = ["available_models", "load", "tokenize_30"]
 _tokenizer = _Tokenizer()
 
 _MODELS = {
@@ -201,8 +201,63 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
 
     return model, _transform(model.input_resolution.item())
 
+def tokenize_30(texts: Union[str, List[str]], context_length: int = 77, truncate: bool = False) -> Union[torch.IntTensor, torch.LongTensor]:
+    """
+    Returns the tokenized representation of given input string(s)
 
-def tokenize(texts: Union[str, List[str]], context_length: int = 77, truncate: bool = False) -> Union[torch.IntTensor, torch.LongTensor]:
+    Parameters
+    ----------
+    texts : Union[str, List[str]]
+        An input string or a list of input strings to tokenize
+
+    context_length : int
+        The context length to use; all CLIP models use 77 as the context length
+
+    truncate: bool
+        Whether to truncate the text in case its encoding is longer than the context length
+
+    Returns
+    -------
+    A two-dimensional tensor containing the resulting tokens, shape = [number of input strings, context_length].
+    We return LongTensor when torch version is <1.8.0, since older index_select requires indices to be long.
+    """
+    if isinstance(texts, str):
+        texts = [texts]
+
+    sot_token = _tokenizer.encoder["<|startoftext|>"]
+    eot_token = _tokenizer.encoder["<|endoftext|>"]
+    som_token = _tokenizer.encoder["<|startofmotion|>"]
+    eom_token = _tokenizer.encoder['<|endofmotion|>']
+    motion_token = _tokenizer.encoder['<|motion|>']
+    all_tokens = [[sot_token] + _tokenizer.encode(text) + [eot_token] + [som_token] + 4*7*[motion_token] + [eom_token] for text in texts]
+    all_tokens_ori= [[sot_token] + _tokenizer.encode(text) + [eot_token] for text in texts]
+    
+    if version.parse(torch.__version__) < version.parse("1.8.0"):
+        result = torch.zeros(len(all_tokens), context_length, dtype=torch.long)
+    else:
+        result = torch.zeros(len(all_tokens), context_length, dtype=torch.int)
+
+    for i, tokens in enumerate(all_tokens):
+        if len(tokens) > context_length:
+            if truncate:
+                tokens = tokens[:47]+tokens[-30:]
+                tokens[46] = eot_token
+            else:
+                raise RuntimeError(f"Input {texts[i]} is too long for context length {context_length}")
+        result[i, :len(tokens)] = torch.tensor(tokens)  ## 这边把有值的给赋了，剩下的都是0了，相当于已经做好了填充
+
+    ## 对于all_tokens_ori也要有个截断控制
+    for i, tokens in enumerate(all_tokens_ori):
+        if len(tokens) > context_length-30:
+            if truncate:
+                tokens = tokens[:47]
+                tokens[46] = eot_token
+            all_tokens_ori[i]=tokens
+
+    return result, all_tokens_ori
+
+
+def tokenize_51(texts: Union[str, List[str]], context_length: int = 77, truncate: bool = False) -> Union[torch.IntTensor, torch.LongTensor]:
     """
     Returns the tokenized representation of given input string(s)
 

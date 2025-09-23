@@ -298,20 +298,22 @@ class CLIP(nn.Module):
         hidden_dim = 256
         out_dim = 32
         self.num_joints = num_joints
-        self.num_motion_tokens = 49   # motion token 的数量（原来写死为 49）
+        self.num_motion_tokens = 28   # motion token 的数量（原来写死为 49）
         self.in_dim = in_dim
         self.out_dim = out_dim
-
-        if z_config.get_diy_config().training.use_single_projection_layer:
-            self.proj_layer = nn.Linear(in_features=512, out_features=7*32)
-        else:
-            self.proj_layers = nn.ModuleList([
-                nn.Sequential(
-                    nn.Linear(in_dim, hidden_dim),
-                    nn.GELU(),
-                    nn.Linear(hidden_dim, out_dim)
-                ) for _ in range(num_joints)
-            ])
+        if self.num_motion_tokens==49:
+            if z_config.get_diy_config().training.use_single_projection_layer:
+                self.proj_layer = nn.Linear(in_features=512, out_features=7*32)
+            else:
+                self.proj_layers = nn.ModuleList([
+                    nn.Sequential(
+                        nn.Linear(in_dim, hidden_dim),
+                        nn.GELU(),
+                        nn.Linear(hidden_dim, out_dim)
+                    ) for _ in range(num_joints)
+                ])
+        if self.num_motion_tokens==28:
+            self.proj_layer = nn.Linear(in_features=512, out_features=32)
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
         self.initialize_parameters()
@@ -394,12 +396,15 @@ class CLIP(nn.Module):
             batch_idx = torch.arange(batch_size, device=device).unsqueeze(1)
             x_motion_tokens = x[batch_idx, motion_indices]  # [B, 49, D]
 
-            if z_config.get_diy_config().training.use_single_projection_layer:
-                x_motion_tokens_proj = self.proj_layer(x_motion_tokens).reshape(*x_motion_tokens.shape[:2], 7, 32)
-            else:
-                # 过 7 个 MLP
-                outs = [layer(x_motion_tokens) for layer in self.proj_layers]  # 每个 [B, 49, out_dim]
-                x_motion_tokens_proj = torch.stack(outs, dim=2)  # [B, 49, 7, 32]
+            if self.num_motion_tokens==49:
+                if z_config.get_diy_config().training.use_single_projection_layer:
+                    x_motion_tokens_proj = self.proj_layer(x_motion_tokens).reshape(*x_motion_tokens.shape[:2], 7, 32)
+                else:
+                    # 过 7 个 MLP
+                    outs = [layer(x_motion_tokens) for layer in self.proj_layers]  # 每个 [B, 49, out_dim]
+                    x_motion_tokens_proj = torch.stack(outs, dim=2)  # [B, 49, 7, 32]
+            if self.num_motion_tokens==28:
+                x_motion_tokens_proj = self.proj_layer(x_motion_tokens)
 
         if return_motion_proj:
             return x, x_motion_tokens_proj

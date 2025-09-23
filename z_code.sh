@@ -1,12 +1,12 @@
 ## 其实是finetune clip训练的启动代码,默认都是finetune CLIP所有的线性层，在这个库中会自动调用VAE
 python -m train.train_finetune_clip \
-    --save_dir save/0914_finetune_clip_using_VAE_wo_reparam_add_post_norm \
+    --save_dir save/0922_finetune_clip_using_VAE_wo_reparam_tpool_49 \
     --dataset humanml \
     --diffusion_steps 50 \
     --text_encoder_type clip \
     --mask_frames \
     --use_ema \
-    --device 2 \
+    --device 3 \
     --overwrite \
     --train_platform_type WandBPlatform \
     --pooling 1

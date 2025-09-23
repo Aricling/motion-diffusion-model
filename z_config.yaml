@@ -1,5 +1,14 @@
 training:
   use_multiview: False
-  use_single_projection_layer: False
-  use_layernorm_to_post_process: true  ## 在最后做loss之前加上归一化
-  use_encoder_output_wo_reparam: true
+  use_single_projection_layer: true ## 28个token的case一定要开起来
+  use_layernorm_to_post_process: false  ## 在最后做loss之前加上归一化
+  ## 上面这个被证明影响不会太大，虽然没有进行联合MDM的训练，对于LoRA CLIP是有一个缩放loss的作用
+  use_encoder_output_wo_reparam: true ## 这个是VAE encoder出来的结果，如果为True，就不做sample
+## 目前是发现，rm_reparam的clip lora结果，联合MDM训练，效果会好一些，所以上面这个参数置为True就可以
+
+vae_model:
+  vae_name: train_vae_on_MB_temp7_try0
+  motion_len_for_training: 98   ## 这里不写的话默认就是64
+  temperal_pooling_scale: 7   ## 每一层temporal pooling的缩放比例，总的比例就是7x7=49，默认是4
+
+overwrite_config: True  ## 一般情况下默认为False，只有resume training的时候才会变成True

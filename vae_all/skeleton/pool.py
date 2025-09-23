@@ -3,6 +3,8 @@ import torch.nn as nn
 
 from utils.skeleton import *
 
+import z_config
+
 class STPool(nn.Module):
     """
     Skeleto-Temporal Pooling.
@@ -19,7 +21,11 @@ class STPool(nn.Module):
 
         self.skeleton_pool, self.skeleton_mapping, self.new_edges = self._get_skeleton_pooling(dataset, depth)
         self.skeleton_pool = nn.Parameter(self.skeleton_pool, requires_grad=False) # [J_out, J_in]
-        self.temporal_pool = nn.AvgPool1d(kernel_size=2, stride=2)
+        if z_config.get_diy_config().vae_model.temperal_pooling_scale!=2:
+            k_size=z_config.get_diy_config().vae_model.temperal_pooling_scale
+            self.temporal_pool = nn.AvgPool1d(kernel_size=k_size, stride=k_size)
+        else:
+            self.temporal_pool = nn.AvgPool1d(kernel_size=2, stride=2)
     
     def _get_skeleton_pooling(self, dataset, depth):
         if depth == 0:
@@ -162,7 +168,11 @@ class STUnpool(nn.Module):
     ):
         super(STUnpool, self).__init__()
         self.skeleton_unpool = nn.Parameter(self._get_skeleton_unpool(skeleton_mapping), requires_grad=False) # [J_out, J_in]
-        self.temporal_unpool = nn.Upsample(scale_factor=2, mode="linear")
+        if z_config.get_diy_config().vae_model.temperal_pooling_scale!=2:
+            temperal_pooling_scale=z_config.get_diy_config().vae_model.temperal_pooling_scale
+            self.temporal_unpool = nn.Upsample(scale_factor=temperal_pooling_scale, mode="linear")
+        else:
+            self.temporal_unpool = nn.Upsample(scale_factor=2, mode="linear")
         
     def _get_skeleton_unpool(self, skeleton_mapping):
         max_idx = -1

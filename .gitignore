@@ -147,3 +147,4 @@ dataset/motion_emb_std.npy
 dataset/t2m_test.npy
 dataset/t2m_val.npy
 vae_all/checkpoints
+save_end2end_training/*

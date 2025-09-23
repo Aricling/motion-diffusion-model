@@ -66,14 +66,13 @@ def main():
     z_config.init_diy_config()
     cfg=z_config.get_diy_config()
     config_path = os.path.join(args.save_dir, 'config.yaml')
-    with open(config_path, 'w') as f:
-        cfg_dict = namespace_to_dict(cfg)
-        yaml.safe_dump(cfg_dict, f, sort_keys=False)
+    z_config.save_config(config_path, cfg, cfg.overwrite_config)
 
     dist_util.setup_dist(args.device)
 
     ## 初始化VAE
     vae_opt = arg_parse(True)
+    vae_opt.vae_name = cfg.vae_model.vae_name
     vae = load_and_freeze_vae(vae_opt)
 
 

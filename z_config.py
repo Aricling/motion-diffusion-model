@@ -28,3 +28,30 @@ def init_diy_config(diy_cfg_path=None):
 def get_diy_config():
     global cfg
     return cfg
+
+def save_config(config_path, cfg, overwrite=False):
+    """
+    将配置对象（可能为 SimpleNamespace 或嵌套结构）保存为 YAML 文件。
+
+    Args:
+        config_path (str): 要保存的 YAML 配置文件路径。
+        cfg: 配置对象，通常是 SimpleNamespace 或 dict 的嵌套结构。
+        overwrite (bool): 是否允许覆盖已存在的配置文件。默认为 False。
+
+    Raises:
+        ValueError: 如果文件已存在且不允许覆盖时抛出。
+    """
+    def namespace_to_dict(ns):
+        if isinstance(ns, SimpleNamespace):
+            return {k: namespace_to_dict(v) for k, v in vars(ns).items()}
+        elif isinstance(ns, dict):
+            return {k: namespace_to_dict(v) for k, v in ns.items()}
+        else:
+            return ns
+
+    if os.path.exists(config_path) and not overwrite:
+        raise ValueError(f"Config file already exists at {config_path} and overwrite is not enabled.")
+    else:
+        with open(config_path, 'w') as f:
+            cfg_dict = namespace_to_dict(cfg)
+            yaml.safe_dump(cfg_dict, f, sort_keys=False)

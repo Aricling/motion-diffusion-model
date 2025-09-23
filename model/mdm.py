@@ -185,7 +185,7 @@ class MDM(nn.Module):
             default_context_length = 77
             context_length = max_text_len + 2 # start_token + 20 + end_token
             assert context_length <= default_context_length
-            texts, texts_tokens = clip.tokenize(raw_text, context_length=context_length, truncate=True) # [bs, context_length] # if n_tokens > context_length -> will truncate
+            texts, texts_tokens = clip.tokenize_30(raw_text, context_length=context_length, truncate=True) # [bs, context_length] # if n_tokens > context_length -> will truncate
             texts_lens_list = [len(text_token) for text_token in texts_tokens]
             texts_tokens_padded=torch.zeros([texts.shape[0], default_context_length], dtype=texts.dtype, device=texts.device)
             for i, text_tokens in enumerate(texts_tokens):

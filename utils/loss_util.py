@@ -60,11 +60,17 @@ def clip_finetune_l2_loss(model_output, x_motion_proj, raw_text_output, MB_targe
     loss_clip = ((diff_clip ** 2) * mask).sum() / (mask.sum() * dim)
     
     # ----- Motion Token Loss -----
-    diff_motion = x_motion_proj - MB_targets  # Compute differences, [batch_size, 49, 7, 32]
+    if x_motion_proj.shape[1]==28:
+        x_motion_proj=x_motion_proj.reshape(batch_size, 4, 7, 32)
+        diff_motion = x_motion_proj - MB_targets
+    else:
+        diff_motion = x_motion_proj - MB_targets  # Compute differences, [batch_size, 49, 7, 32]
     
     # ----- Motion Mask Generation -----
-    frame_group_count = 49
-    frames_per_group = 4
+    # frame_group_count = 49
+    # frames_per_group = 4
+    frame_group_count = 4
+    frames_per_group = 49
     tokens_per_group = 7
     B, groups, num_joints, out_dim = x_motion_proj.shape    ## [batch_size, 49, 7, 32]
 
