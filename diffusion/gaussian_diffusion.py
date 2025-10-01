@@ -640,6 +640,18 @@ class GaussianDiffusion:
             # model_kwargs['y']['text_embed'] = model.encode_text(model_kwargs['y']['text'])
             model_output, targets_texts, texts_len_list, x_motion_proj = model.encode_text(model_kwargs['y']['text'])  ## targets_texts是原本的CLIP
             target_MB_motion_VAE, _ = vae.encode(model_kwargs['y']['MB_emb'])
+        from utils.debug_util import save_debug_tensors
+        save_debug_tensors(
+            save_path="./debug/train",  # 或 "./debug/test"
+            filename=f"batch_0_test.npz",
+            model_output=model_output,
+            targets_texts=targets_texts,
+            x_motion_proj=x_motion_proj,
+            target_MB_motion_VAE=target_MB_motion_VAE,
+            texts_len_list=texts_len_list,
+            motion_lens_list=model_kwargs['y']['lengths'],
+            db_key=model_kwargs['y']['db_key']  # ✅ 新增：通常是 list[str]
+        )
         terms = self.clip_finetune_l2_loss(model_output, x_motion_proj, targets_texts, target_MB_motion_VAE, texts_len_list, motion_lens_list=model_kwargs['y']['lengths'])
         return terms
         
@@ -1264,6 +1276,18 @@ class GaussianDiffusion:
             }[self.model_mean_type]
             # assert model_output.shape == target.shape == x_start.shape  # [bs, njoints, nfeats, nframes]
 
+            from utils.debug_util import save_debug_tensors
+            save_debug_tensors(
+                save_path="./debug/train",  # 或 "./debug/test"
+                filename=f"train_batch_0.npz",
+                model_output=model_output,
+                targets_texts=targets_texts,
+                x_motion_proj=x_motion_proj,
+                target_MB_motion_VAE=targets_texts,
+                texts_len_list=texts_len_list,
+                motion_lens_list=model_kwargs['y']['lengths'],
+                db_key=model_kwargs['y']['db_key']  # ✅ 新增：通常是 list[str]
+            )
             terms = self.clip_finetune_l2_loss(model_output, x_motion_proj, targets_texts, x_start, texts_len_list, motion_lens_list=model_kwargs['y']['lengths'])
             # terms["rot_mse"] = self.masked_l2(target, model_output, mask) # mean_flat(rot_mse)
 

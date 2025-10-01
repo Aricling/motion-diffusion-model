@@ -14,8 +14,8 @@ python -m train.train_finetune_clip \
 
 # eval fintuned CLIP启动代码，最后会报错，不过会运行成功的
 python -m eval.eval_fted_clip \
-    --model_path /home/mengqing/usr/motion-diffusion-model/save/0908_finetune_clip_all_layers_using_VAE_try1/model000250000.pt \
-    --device 1
+    --model_path /home/mengqing/usr/motion-diffusion-model/save/0922_finetune_clip_using_VAE_wo_reparam_tpool_49/model000550000.pt \
+    --device 3
 
 
 # 训来MDM+distilled Bert的代码

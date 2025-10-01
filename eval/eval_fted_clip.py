@@ -293,7 +293,7 @@ if __name__ == '__main__':
         diversity_times = 300
         replication_times = 5  # about 3 Hrs
     elif args.eval_mode == 'wo_mm':
-        num_samples_limit = 3000
+        num_samples_limit = None
         run_mm = False
         mm_num_samples = 0
         mm_num_repeats = 0
@@ -316,8 +316,8 @@ if __name__ == '__main__':
     logger.configure()
 
     logger.log("creating data loader...")
-    split = 'test'
-    # split = 'train'
+    # split = 'test'
+    split = 'train'
     gt_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split=split, hml_mode='gt')
     # gen_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split=split, hml_mode='eval')
     # added new features + support for prefix completion:

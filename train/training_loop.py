@@ -23,7 +23,7 @@ from tqdm import tqdm
 from diffusion.resample import create_named_schedule_sampler
 from data_loaders.humanml.networks.evaluator_wrapper import EvaluatorMDMWrapper
 from eval import eval_humanml, eval_humanact12_uestc
-from sample.generate import main as generate
+# from sample.generate import main as generate
 from data_loaders.get_data import get_dataset_loader
 from utils.model_util import load_model_wo_clip
 from data_loaders.humanml.scripts.motion_process import get_target_location, sample_goal, get_allowed_joint_options
