@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Optional, Dict, Any
 from utils import dist_util
+import z_config
 
 def prepare_lora_clip_model(
     clip_model,
@@ -31,8 +32,9 @@ def prepare_lora_clip_model(
     dev = dist_util.dev() if device is None else device
 
     # 1. 克隆原始模型用于推理（冻结）
-    clip_model_ori = clip_model  # 保留原始权重用于推理或计算损失
-    clip_model_ori = clip_model_ori.eval()
+    import copy
+    clip_model_ori = copy.deepcopy(clip_model).eval()
+    clip_model = copy.deepcopy(clip_model)
     for param in clip_model_ori.parameters():
         param.requires_grad = False
 
@@ -43,6 +45,18 @@ def prepare_lora_clip_model(
 
     # 3. 保存原始 token embedding 权重
     old_weight = clip_model.token_embedding.weight.detach().clone()
+    
+    unfreeze_last_n_layers = z_config.get_diy_config().model.clip_unfreeze_last_n_layers
+    if unfreeze_last_n_layers > 0:
+        total_layers = len(clip_model.transformer.resblocks)
+        assert unfreeze_last_n_layers <= total_layers, \
+            f"unfreeze_last_n_layers ({unfreeze_last_n_layers}) > total layers ({total_layers})"
+        
+        for i in range(total_layers - unfreeze_last_n_layers, total_layers):
+            block = clip_model.transformer.resblocks[i]
+            for param in block.parameters():
+                param.requires_grad = True
+        print(f"Unfrozen last {unfreeze_last_n_layers} transformer layers.")
 
     # 4. 扩展 embedding 层
     old_vocab_size, embedding_dim = old_weight.shape

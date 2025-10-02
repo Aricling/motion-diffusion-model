@@ -495,6 +495,8 @@ class MDM(nn.Module):
                 # ----- simplified data 模式 -----
                 if z_config.get_diy_config().training.use_gt_MB_simplified_data:
                     enc_text = torch.cat((ori_CLIP_cls_emb, gt_MB_rep), dim=1)
+                    if z_config.get_diy_config().training.use_MB_token_only:
+                        enc_text = gt_MB_rep
 
                 # ----- end2end 训练 -----
                 if z_config.get_diy_config().training_input.use_end2end_ding_training:

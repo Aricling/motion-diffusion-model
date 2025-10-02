@@ -5,24 +5,26 @@ model:
   use_avg_clip_model: True
   use_contronet_injection: false ## 这个置为True时，目前代码中arch一定得是encoder，decoder就不支持，也没有必要用controlnet注入
   # MDM_model_file: mdm_add_embed_motion
+  clip_unfreeze_last_n_layers: 3  ## 关于是否要解冻CLIP后面几层的参数，这个参数是0的话，就不会解冻
   MDM_model_file: mdm
 
 ## 针对于端到端训练所采用的一些参数
 training_input:
   use_end2end_ding_training: True ## 这个相当于这整条branch的开关，在这个git branch中，应该设置为True
   
-  use_cls_token: true
+  use_cls_token: True
   not_use_cls_token: False
   use_mean_MB_as_cls_in_gt_branch: false
   both_use_ori_clip_cls_token: false
   add_proj_linear_to_MB_rep: false
 
-  cls_and_MB_extra_supervision_loss: true ## 指的是clip的cls token和motion bert的token之间约束的额外loss，为True的话就会有反向传播，false的话只记录不传播
-  all_batch_using_lora_clip_out: true  ## 全部的64个batch都使用lora CLIP来进行生成，一般和上面这个和起来用，不让clip的MotionBert token输出就没有监督了
+  cls_and_MB_extra_supervision_loss: True ## 指的是clip的cls token和motion bert的token之间约束的额外loss，为True的话就会有反向传播，false的话只记录不传播
+  all_batch_using_lora_clip_out: True  ## 全部的64个batch都使用lora CLIP来进行生成，一般和上面这个和起来用，不让clip的MotionBert token输出就没有监督了
 
 
 training:
-  use_gt_MB_simplified_data: False  ## 这个是是否直接使用gt的motion token来跑
+  use_gt_MB_simplified_data: False  ## 这个是是否直接使用gt的cls+motion token来跑
+  use_MB_token_only: False  ## 在上面使用gt的基础上，是否删除cls loss的实验
   use_multiview_training: False ## 现在是直接使用multiview trained CLIP，这个参数好像就没什么用了
   split_info_injection: False ## 如果这个为False，下面的那个split_info_version参数就不会被用到
   split_info_version: 2
