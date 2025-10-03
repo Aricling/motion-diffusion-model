@@ -10,16 +10,16 @@ model:
 
 ## 针对于端到端训练所采用的一些参数
 training_input:
-  use_end2end_ding_training: True ## 这个相当于这整条branch的开关，在这个git branch中，应该设置为True
+  use_end2end_ding_training: False ## 这个相当于这整条branch的开关，在这个git branch中，应该设置为True
   
-  use_cls_token: True
+  use_cls_token: False
   not_use_cls_token: False
   use_mean_MB_as_cls_in_gt_branch: false
   both_use_ori_clip_cls_token: false
   add_proj_linear_to_MB_rep: false
 
-  cls_and_MB_extra_supervision_loss: True ## 指的是clip的cls token和motion bert的token之间约束的额外loss，为True的话就会有反向传播，false的话只记录不传播
-  all_batch_using_lora_clip_out: True  ## 全部的64个batch都使用lora CLIP来进行生成，一般和上面这个和起来用，不让clip的MotionBert token输出就没有监督了
+  cls_and_MB_extra_supervision_loss: False ## 指的是clip的cls token和motion bert的token之间约束的额外loss，为True的话就会有反向传播，false的话只记录不传播
+  all_batch_using_lora_clip_out: False  ## 全部的64个batch都使用lora CLIP来进行生成，一般和上面这个和起来用，不让clip的MotionBert token输出就没有监督了
 
 
 training:
