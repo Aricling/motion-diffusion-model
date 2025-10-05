@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import clip
 from model.rotation2xyz import Rotation2xyz
-from model.BERT.BERT_encoder import load_bert
+from model.BERT.BERT_encoder_lora import load_bert
 from utils.misc import WeightedSum
 from clip.utils.lora_util import apply_lora_attn_mlp, init_finetuned_clip_and_freeze
 import z_config
@@ -314,14 +314,6 @@ class MDM(nn.Module):
 
         return ori_text_cls_emb, texts_lens_list
     
-    def bert_encode_text(self, raw_text):
-        # enc_text = self.clip_model(raw_text)
-        # enc_text = enc_text.permute(1, 0, 2)
-        # return enc_text
-        enc_text, mask = self.clip_model(raw_text)  # self.clip_model.get_last_hidden_state(raw_text, return_mask=True)  # mask: False means no token there
-        enc_text = enc_text.permute(1, 0, 2)
-        mask = ~mask  # mask: True means no token there, we invert since the meaning of mask for transformer is inverted  https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
-        return enc_text, mask
 
     def cmdm_forward(self, x, timesteps, y=None):
         bs, njoints, nfeats, nframes = x.shape
@@ -450,6 +442,38 @@ class MDM(nn.Module):
 
         return debug_losses
 
+    def extract_special_range(self, enc_text, false_counts, start_offset=-31, end_offset=-3):
+        """
+        提取从 false_counts+start_offset 到 false_counts+end_offset 区间的 token embedding
+
+        参数:
+            enc_text: Tensor, shape [seq_len, batch, hidden_dim] 或 [batch, seq_len, hidden_dim]
+            false_counts: Tensor, shape [batch]，表示每个样本中 False 的数量
+            start_offset: int，起始相对偏移 (包含)
+            end_offset: int，结束相对偏移 (包含)
+
+        返回:
+            special_tokens: list[Tensor]，长度=batch，每个元素 [num_tokens, hidden_dim]
+                            由于每个样本区间长度可能不一样，所以返回 list 而不是 tensor
+        """
+        # 转换成 [batch, seq_len, hidden_dim]
+        if enc_text.shape[0] != false_counts.shape[0]:
+            enc_text = enc_text.transpose(0, 1)
+
+        batch_size, seq_len, hidden_dim = enc_text.shape
+        device = enc_text.device
+
+        special_tokens = []
+        for b in range(batch_size):
+            start_idx = false_counts[b].item() + start_offset
+            end_idx   = false_counts[b].item() + end_offset
+            if start_idx < 0 or end_idx >= seq_len:
+                raise ValueError(f"batch {b}: 索引越界 ({start_idx}, {end_idx})")
+            tokens = enc_text[b, start_idx:end_idx]  # [num_tokens, hidden_dim]
+            special_tokens.append(tokens)
+        MB_tokens = torch.stack(special_tokens)
+
+        return MB_tokens
 
     def forward(self, x, timesteps, y=None):
         """
@@ -479,92 +503,102 @@ class MDM(nn.Module):
             if 'text_embed' in y:  # caching option
                 enc_text = y['text_embed']
             else:
-                # ----- 编码 text -----
-                lora_enc_cls_MB, texts_len_list = self.lora_clip_encode_text(y['text'])  # [bs, 29, 512]
-                lora_enc_cls = lora_enc_cls_MB[:, :1, :]
-                lora_CLIP_MB_rep = lora_enc_cls_MB[:, 1:, :]
-                ori_CLIP_cls_emb, _ = self.ori_clip_encode_text(y['text'])
+                ## 使用bert来encoder text代码
+                enc_text = self.bert_encode_text(y['text'])
+                if type(enc_text) == tuple:
+                    enc_text, text_mask = enc_text
+                    
+                    if text_mask.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
+                        text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
+                
+                
+                if False:
+                    # ----- 编码 text -----
+                    lora_enc_cls_MB, texts_len_list = self.lora_clip_encode_text(y['text'])  # [bs, 29, 512]
+                    lora_enc_cls = lora_enc_cls_MB[:, :1, :]
+                    lora_CLIP_MB_rep = lora_enc_cls_MB[:, 1:, :]
+                    ori_CLIP_cls_emb, _ = self.ori_clip_encode_text(y['text'])
 
-                # ----- 保存 loss -----
-                gt_MB_rep = y.get('motion_token_emb', None)
-                if gt_MB_rep is not None:
-                    self.last_debug_losses = self._compute_debug_losses(
-                        lora_enc_cls, ori_CLIP_cls_emb, lora_CLIP_MB_rep, gt_MB_rep, y['lengths']
-                    )
+                    # ----- 保存 loss -----
+                    gt_MB_rep = y.get('motion_token_emb', None)
+                    if gt_MB_rep is not None:
+                        self.last_debug_losses = self._compute_debug_losses(
+                            lora_enc_cls, ori_CLIP_cls_emb, lora_CLIP_MB_rep, gt_MB_rep, y['lengths']
+                        )
 
-                # ----- simplified data 模式 -----
-                if z_config.get_diy_config().training.use_gt_MB_simplified_data:
-                    enc_text = torch.cat((ori_CLIP_cls_emb, gt_MB_rep), dim=1)
-                    if z_config.get_diy_config().training.use_MB_token_only:
-                        enc_text = gt_MB_rep
+                    # ----- simplified data 模式 -----
+                    if z_config.get_diy_config().training.use_gt_MB_simplified_data:
+                        enc_text = torch.cat((ori_CLIP_cls_emb, gt_MB_rep), dim=1)
+                        if z_config.get_diy_config().training.use_MB_token_only:
+                            enc_text = gt_MB_rep
 
-                # ----- end2end 训练 -----
-                if z_config.get_diy_config().training_input.use_end2end_ding_training:
-                    eval_time = y.get("eval_time", False)
-                    bs = lora_enc_cls.shape[0]
+                    # ----- end2end 训练 -----
+                    if z_config.get_diy_config().training_input.use_end2end_ding_training:
+                        eval_time = y.get("eval_time", False)
+                        bs = lora_enc_cls.shape[0]
 
-                    # --- proj 操作（按需应用）---
-                    if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                        lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
-                        if gt_MB_rep is not None:
-                            gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
+                        # --- proj 操作（按需应用）---
+                        if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+                            lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
+                            if gt_MB_rep is not None:
+                                gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
 
-                    def _build_enc_text(mode):
-                        """
-                        mode: "eval" / "train"
-                        """
-                        if z_config.get_diy_config().training_input.use_cls_token:
-                            # cls token
-                            lora_enc_proj = self.lra_clip_proj(lora_enc_cls)
-                            ori_cls_proj = self.ori_clip_proj(ori_CLIP_cls_emb)
+                        def _build_enc_text(mode):
+                            """
+                            mode: "eval" / "train"
+                            """
+                            if z_config.get_diy_config().training_input.use_cls_token:
+                                # cls token
+                                lora_enc_proj = self.lra_clip_proj(lora_enc_cls)
+                                ori_cls_proj = self.ori_clip_proj(ori_CLIP_cls_emb)
 
-                            if mode == "eval":
-                                test_gt_input = False   ## 这边就是测试使用另外一条支路来构建条件咯
-                                if test_gt_input == True:
-                                    return torch.cat((ori_cls_proj, gt_MB_rep), dim=1)
-                                return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim=1)
-                            else:  # train: 一半gt一半lora
-                                if z_config.get_diy_config().training_input.all_batch_using_lora_clip_out:
-                                    return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim = 1)
+                                if mode == "eval":
+                                    test_gt_input = False   ## 这边就是测试使用另外一条支路来构建条件咯
+                                    if test_gt_input == True:
+                                        return torch.cat((ori_cls_proj, gt_MB_rep), dim=1)
+                                    return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim=1)
+                                else:  # train: 一半gt一半lora
+                                    if z_config.get_diy_config().training_input.all_batch_using_lora_clip_out:
+                                        return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim = 1)
+                                    else:
+                                        enc_gt = torch.cat((ori_cls_proj[:bs // 2], gt_MB_rep[:bs // 2]), dim=1)
+                                        enc_lora = torch.cat((lora_enc_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
+                                    return torch.cat((enc_gt, enc_lora), dim=0)
+
+                            elif z_config.get_diy_config().training_input.not_use_cls_token:
+                                if mode == "eval":
+                                    return lora_CLIP_MB_rep
+                                else:
+                                    enc_gt = gt_MB_rep[:bs // 2]
+                                    enc_lora = lora_CLIP_MB_rep[:bs // 2]
+                                    return torch.cat((enc_gt, enc_lora), dim=0)
+
+                            elif z_config.get_diy_config().training_input.use_mean_MB_as_cls_in_gt_branch:
+                                lora_enc_proj = self.lra_clip_proj(lora_enc_cls)
+                                mean_cls_gt = torch.mean(gt_MB_rep, dim=1, keepdim=True)
+
+                                if mode == "eval":
+                                    return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim=1)
+                                else:
+                                    enc_gt = torch.cat((mean_cls_gt[:bs // 2], gt_MB_rep[:bs // 2]), dim=1)
+                                    enc_lora = torch.cat((lora_enc_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
+                                    return torch.cat((enc_gt, enc_lora), dim=0)
+
+                            elif z_config.get_diy_config().training_input.both_use_ori_clip_cls_token:
+                                ori_cls_proj = self.ori_clip_proj(ori_CLIP_cls_emb)
+
+                                if mode == "eval":
+                                    return torch.cat((ori_cls_proj, lora_CLIP_MB_rep), dim=1)
                                 else:
                                     enc_gt = torch.cat((ori_cls_proj[:bs // 2], gt_MB_rep[:bs // 2]), dim=1)
-                                    enc_lora = torch.cat((lora_enc_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
-                                return torch.cat((enc_gt, enc_lora), dim=0)
+                                    enc_lora = torch.cat((ori_cls_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
+                                    return torch.cat((enc_gt, enc_lora), dim=0)
 
-                        elif z_config.get_diy_config().training_input.not_use_cls_token:
-                            if mode == "eval":
-                                return lora_CLIP_MB_rep
                             else:
-                                enc_gt = gt_MB_rep[:bs // 2]
-                                enc_lora = lora_CLIP_MB_rep[:bs // 2]
-                                return torch.cat((enc_gt, enc_lora), dim=0)
+                                raise ValueError("Invalid training_input config")
 
-                        elif z_config.get_diy_config().training_input.use_mean_MB_as_cls_in_gt_branch:
-                            lora_enc_proj = self.lra_clip_proj(lora_enc_cls)
-                            mean_cls_gt = torch.mean(gt_MB_rep, dim=1, keepdim=True)
-
-                            if mode == "eval":
-                                return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim=1)
-                            else:
-                                enc_gt = torch.cat((mean_cls_gt[:bs // 2], gt_MB_rep[:bs // 2]), dim=1)
-                                enc_lora = torch.cat((lora_enc_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
-                                return torch.cat((enc_gt, enc_lora), dim=0)
-
-                        elif z_config.get_diy_config().training_input.both_use_ori_clip_cls_token:
-                            ori_cls_proj = self.ori_clip_proj(ori_CLIP_cls_emb)
-
-                            if mode == "eval":
-                                return torch.cat((ori_cls_proj, lora_CLIP_MB_rep), dim=1)
-                            else:
-                                enc_gt = torch.cat((ori_cls_proj[:bs // 2], gt_MB_rep[:bs // 2]), dim=1)
-                                enc_lora = torch.cat((ori_cls_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
-                                return torch.cat((enc_gt, enc_lora), dim=0)
-
-                        else:
-                            raise ValueError("Invalid training_input config")
-
-                    # ---- 根据 eval/train 选择拼接方式 ----
-                    enc_text = _build_enc_text("eval" if eval_time else "train")
+                        # ---- 根据 eval/train 选择拼接方式 ----
+                        enc_text = _build_enc_text("eval" if eval_time else "train")
 
                 
                 ## 是否进一步pooling的对比实验
@@ -583,14 +617,15 @@ class MDM(nn.Module):
                         motion_token_emb = motion_token_emb.mean(dim=2)  # [B, 4, D] -> 关节点维度池化 (7->1)
                         # 此时 shape: [B, 4, D]
                     enc_text = torch.cat((enc_text[:,:1,:], motion_token_emb), dim=1)
-            if type(enc_text) == tuple: ## 不会跑
-                enc_text, text_mask = enc_text
-                if text_mask.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
-                    text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
+
             ## 这里是有一个text的映射！！！得注意一下
             text_emb = self.embed_text(self.mask_cond(enc_text, force_mask=force_mask))  # casting mask for the single-prompt-for-all case
+            
+            false_counts = (~text_mask).sum(dim=1)  ## 统计整一个seq有效token的长度，之后要取出text token和motion token
+            lora_CLIP_MB_rep = self.extract_special_range(text_emb, false_counts, start_offset=-31, end_offset=-3)  ## 提取distillBert的MB结果
+
             if self.emb_policy == 'add':
-                emb = text_emb.permute(1,0,2).contiguous() + time_emb
+                emb = text_emb + time_emb
             else:
                 emb = torch.cat([time_emb, text_emb], dim=0)
                 text_mask = torch.cat([torch.zeros_like(text_mask[:, 0:1]), text_mask], dim=1)
@@ -731,7 +766,23 @@ class MDM(nn.Module):
              return output, self.last_debug_losses
         else:
             return output
-
+        
+    def add_motion_tokens(self, texts, motion_token="<motion_token>", start_token="<start_of_motion>", end_token="<end_of_motion>", num_start=28):
+        processed = []
+        for t in texts:
+            new_t = t + " " + start_token + " " + " ".join([motion_token] * num_start) + " " + end_token
+            processed.append(new_t)
+        return processed
+        
+    def bert_encode_text(self, raw_text):
+        # enc_text = self.clip_model(raw_text)
+        # enc_text = enc_text.permute(1, 0, 2)
+        # return enc_text
+        texts_with_tokens = self.add_motion_tokens(raw_text)
+        enc_text, mask = self.clip_model(texts_with_tokens)  # self.clip_model.get_last_hidden_state(raw_text, return_mask=True)  # mask: False means no token there
+        enc_text = enc_text.permute(1, 0, 2)
+        mask = ~mask  # mask: True means no token there, we invert since the meaning of mask for transformer is inverted  https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
+        return enc_text, mask
 
     def _apply(self, fn):
         super()._apply(fn)

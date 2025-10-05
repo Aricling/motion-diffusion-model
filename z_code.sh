@@ -1,11 +1,11 @@
 ## 训练代码
 # 以微调的CLIP来训练MDM，启动代码，并且加上了在训练的时候验证
 python -m train.train_mdm \
-    --save_dir save_end2end_training/1001_train_mdm_clip_pool49_use_cls_token_clip_unfreeze_last_n_layers_3_add_supervision_loss_all_batch_using_lora_clip_out \
+    --save_dir save_end2end_training_bert/1003_train_mdm_bert_dec \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \
-    --text_encoder_type clip \
+    --text_encoder_type bert \
     --mask_frames \
     --use_ema \
     --device 5 \

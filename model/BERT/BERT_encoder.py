@@ -25,8 +25,8 @@ class BERT(nn.Module):
 
 
     def forward(self, texts):
-        encoded_inputs = self.tokenizer(texts, return_tensors="pt", padding=True)
+        encoded_inputs = self.tokenizer(texts, return_tensors="pt", padding=True)   ## [bs, 35]，这里面padding为True其实会自动padding到这个batch中最长的这个text来算
         output = self.text_model(**encoded_inputs.to(self.text_model.device)).last_hidden_state
-        mask = encoded_inputs.attention_mask.to(dtype=bool)
+        mask = encoded_inputs.attention_mask.to(dtype=bool) ## [bs, 35, 768]
         # output = output * mask.unsqueeze(-1)
         return output, mask
