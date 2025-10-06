@@ -3,12 +3,12 @@ import torch
 import torch.nn as nn
 from peft import get_peft_model, LoraConfig, TaskType
 
-def load_bert(model_path):
-    bert = BERT(model_path)
+def load_bert_lora(model_path):
+    bert = BERT_LoRA(model_path)
     bert.eval()
     return bert
 
-class BERT(nn.Module):
+class BERT_LoRA(nn.Module):
     def __init__(self, modelpath: str):
         super().__init__()
 

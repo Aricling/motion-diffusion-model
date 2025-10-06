@@ -1,5 +1,6 @@
 import torch.nn as nn
 import os
+import z_config
 
 def load_bert(model_path):
     bert = BERT(model_path)
@@ -25,7 +26,16 @@ class BERT(nn.Module):
 
 
     def forward(self, texts):
-        encoded_inputs = self.tokenizer(texts, return_tensors="pt", padding=True)   ## [bs, 35]，这里面padding为True其实会自动padding到这个batch中最长的这个text来算
+        if z_config.get_diy_config().model.MDM_model_file == "mdm_another_transformerEnclayer":
+            encoded_inputs = self.tokenizer(
+                texts,
+                return_tensors="pt",
+                padding="max_length",   # ✅ 固定长度 padding
+                truncation=True,        # ✅ 超过自动截断
+                max_length=50           # ✅ 固定长度 50
+            )
+        else:
+            encoded_inputs = self.tokenizer(texts, return_tensors="pt", padding=True)   ## [bs, 35]，这里面padding为True其实会自动padding到这个batch中最长的这个text来算
         output = self.text_model(**encoded_inputs.to(self.text_model.device)).last_hidden_state
         mask = encoded_inputs.attention_mask.to(dtype=bool) ## [bs, 35, 768]
         # output = output * mask.unsqueeze(-1)

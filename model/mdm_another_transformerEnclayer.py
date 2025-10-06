@@ -195,13 +195,14 @@ class MDM(nn.Module):
                     print("Loading BERT...")
                     # bert_model_path = 'model/BERT/distilbert-base-uncased'
                     bert_model_path = 'distilbert/distilbert-base-uncased'
-                    self.clip_model = load_bert_lora(bert_model_path)  # Sorry for that, the naming is for backward compatibility
+                    # self.clip_model = load_bert_lora(bert_model_path)  # Sorry for that, the naming is for backward compatibility
                     self.clip_model_ori = load_bert(bert_model_path)
                     self.clip_dim = 768
                 else:
                     raise ValueError('We only support [CLIP, BERT] text encoders') 
                 
                 self.embed_text = nn.Linear(self.clip_dim, self.latent_dim)
+                self.motion_token_dim_proj = nn.Linear(self.clip_dim, self.latent_dim)
                 
             if 'action' in self.cond_mode:
                 self.embed_action = EmbedAction(self.num_actions, self.latent_dim)
@@ -239,6 +240,8 @@ class MDM(nn.Module):
                 if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
                     self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
                     self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+
+        self.extended_proj_model = ExtendedTransformerEncoder(embed_dim=768, num_heads=8, num_layers=1, add_tokens=28)
 
     def zero_module(self, module):
         """
@@ -367,29 +370,26 @@ class MDM(nn.Module):
 
         return control
     
-    def compute_mb_rep_loss(
+    def _compute_debug_losses(
+        self,
+        lora_enc_cls,
+        ori_CLIP_cls_emb,
         lora_CLIP_MB_rep,
         gt_MB_rep,
-        motion_lens_tensor,
-        use_supervision_loss=True,
+        motion_lens_list,
+        **kwargs
     ):
         """
-        计算 MB 表征的监督 loss（LoRA vs GT）。
-        对应原 _compute_debug_losses() 中 MB rep 部分。
-
-        Args:
-            lora_CLIP_MB_rep (torch.Tensor): 来自 LoRA 的 motion feature, [B, T, D]
-            gt_MB_rep (torch.Tensor): GT motion feature, [B, T, D]
-            motion_lens_tensor (torch.Tensor): 每个样本的 motion 长度, [B]
-            use_supervision_loss (bool): 是否允许反向传播梯度
-                - True: 返回带梯度的 loss
-                - False: 在 no_grad 环境下返回 float
-
-        Returns:
-            dict: {"mb_lora_vs_gt": loss 或 loss.item()}
+        计算调试用的特征对齐 loss。
+        - 如果 cls_and_MB_extra_supervision_loss = True，返回可梯度回传的 tensor；
+        - 否则返回 float 值（.item()），仅用于监控。
         """
-        device = lora_CLIP_MB_rep.device
+        device = lora_enc_cls.device
+        motion_lens_tensor = motion_lens_list.detach().clone().to(device)
         debug_losses = {}
+
+        use_supervision_loss = z_config.get_diy_config().training_input.cls_and_MB_extra_supervision_loss
+        ctx = torch.no_grad() if not use_supervision_loss else contextlib.nullcontext()
 
         def _finalize_loss(loss_value):
             """根据模式返回 tensor 或 float"""
@@ -399,55 +399,61 @@ class MDM(nn.Module):
             """返回一个 0 loss（支持梯度回传）"""
             return torch.tensor(0.0, device=x.device, requires_grad=True)
 
-        ctx = torch.no_grad() if not use_supervision_loss else contextlib.nullcontext()
-
         with ctx:
             # -------------------------------------------------
-            # 形状检查
+            # 1. CLS token: LoRA vs Original CLIP
             # -------------------------------------------------
-            if lora_CLIP_MB_rep.shape != gt_MB_rep.shape:
-                print(f"[WARNING] MB Shape mismatch: lora {lora_CLIP_MB_rep.shape} vs gt {gt_MB_rep.shape}")
-                debug_losses["mb_lora_vs_gt"] = (
-                    _zero_loss_like(lora_CLIP_MB_rep) if use_supervision_loss else float("nan")
-                )
-                return debug_losses
+            if lora_enc_cls.shape == ori_CLIP_cls_emb.shape:
+                cls_loss = torch.nn.functional.mse_loss(lora_enc_cls, ori_CLIP_cls_emb)
+                debug_losses["cls_lora_vs_clip"] = _finalize_loss(cls_loss)
+            elif self.text_encoder_type == "bert":
+                text_mask = kwargs.get('text_mask')
+                squared_error = ((lora_enc_cls[:len(ori_CLIP_cls_emb)] - ori_CLIP_cls_emb) ** 2) # *(~text_mask.unsqueeze(2).permute(1,0,2))
+                valid_mask = (~text_mask).unsqueeze(-1).permute(1,0,2)
+                masked_squared_error = squared_error * valid_mask
+                total_valid_elements = valid_mask.sum() * squared_error.size(-1)  # [T*B*mask==1] * D
+                cls_loss = masked_squared_error.sum() / (total_valid_elements + 1e-8)
+                debug_losses["cls_lora_vs_clip"] = _finalize_loss(cls_loss)
 
-            B, T, D = lora_CLIP_MB_rep.shape
-
-            # -------------------------------------------------
-            # 构造 motion mask [B, 28, D]
-            # -------------------------------------------------
-            frame_group_count, frames_per_group, tokens_per_group = 4, 49, 7
-            fuse_mask_4 = (
-                motion_lens_tensor.view(-1, 1)
-                >= torch.arange(1, frame_group_count + 1, device=device) * frames_per_group
-            )  # [B, 4]
-
-            motion_mask = (
-                fuse_mask_4.unsqueeze(-1)
-                .expand(-1, -1, tokens_per_group)
-                .reshape(B, 28)
-                .unsqueeze(-1)
-                .expand(B, 28, D)
-                .float()
-            )
-
-            # -------------------------------------------------
-            # 逐元素 MSE 并应用 mask
-            # -------------------------------------------------
-            elementwise_loss = (lora_CLIP_MB_rep - gt_MB_rep) ** 2
-            masked_loss = elementwise_loss * motion_mask
-
-            # -------------------------------------------------
-            # 归一化
-            # -------------------------------------------------
-            num_valid_elements = motion_mask.sum()
-            if num_valid_elements > 0:
-                mb_loss = masked_loss.sum() / num_valid_elements
             else:
-                mb_loss = _zero_loss_like(lora_CLIP_MB_rep)
+                print(f"[WARNING] CLS Shape mismatch: lora {lora_enc_cls.shape} vs ori {ori_CLIP_cls_emb.shape}")
+                debug_losses["cls_lora_vs_clip"] = _zero_loss_like(lora_enc_cls) if use_supervision_loss else float("nan")
 
-            debug_losses["mb_lora_vs_gt"] = _finalize_loss(mb_loss)
+            # -------------------------------------------------
+            # 2. MB rep: LoRA vs GT
+            # -------------------------------------------------
+            if lora_CLIP_MB_rep.shape == gt_MB_rep.shape:
+                B, T, D = lora_CLIP_MB_rep.shape
+
+                # 构造 motion mask [B, 28, D]
+                frame_group_count, frames_per_group, tokens_per_group = 4, 49, 7
+                fuse_mask_4 = (
+                    motion_lens_tensor.view(-1, 1) >= torch.arange(1, frame_group_count + 1, device=device) * frames_per_group
+                )  # [B, 4]
+                motion_mask = (
+                    fuse_mask_4.unsqueeze(-1)
+                    .expand(-1, -1, tokens_per_group)
+                    .reshape(B, 28)
+                    .unsqueeze(-1)
+                    .expand(B, 28, D)
+                    .float()
+                )
+
+                # 逐元素 MSE 并应用 mask
+                elementwise_loss = (lora_CLIP_MB_rep - gt_MB_rep) ** 2
+                masked_loss = elementwise_loss * motion_mask
+
+                # 归一化
+                num_valid_elements = motion_mask.sum()
+                if num_valid_elements > 0:
+                    mb_loss = masked_loss.sum() / num_valid_elements
+                else:
+                    mb_loss = _zero_loss_like(lora_CLIP_MB_rep)
+
+                debug_losses["mb_lora_vs_gt"] = _finalize_loss(mb_loss)
+            else:
+                print(f"[WARNING] MB Shape mismatch: lora {lora_CLIP_MB_rep.shape} vs gt {gt_MB_rep.shape}")
+                debug_losses["mb_lora_vs_gt"] = _zero_loss_like(lora_CLIP_MB_rep) if use_supervision_loss else float("nan")
 
         return debug_losses
 
@@ -484,6 +490,75 @@ class MDM(nn.Module):
 
         return MB_tokens
 
+    def compute_mb_rep_loss(self, lora_CLIP_MB_rep, gt_MB_rep, motion_lens_tensor):
+        """
+        计算 MB 表征的监督 loss。
+        对应于原 _compute_debug_losses() 中的 MB rep: LoRA vs GT 部分。
+
+        Args:
+            lora_CLIP_MB_rep (torch.Tensor): 来自 LoRA 的 motion feature, [B, T, D]
+            gt_MB_rep (torch.Tensor): GT motion feature, [B, T, D]
+            motion_lens_tensor (torch.Tensor): 每个样本的 motion 长度, [B]
+            use_supervision_loss (bool): 是否返回带梯度的 loss（否则返回 float）
+
+        Returns:
+            dict: {"mb_lora_vs_gt": loss 或 loss.item()}
+        """
+        device = lora_CLIP_MB_rep.device
+        debug_losses = {}
+
+        use_supervision_loss = z_config.get_diy_config().training_input.cls_and_MB_extra_supervision_loss
+
+        def _finalize_loss(loss_value):
+            """根据模式返回 tensor 或 float"""
+            return loss_value if use_supervision_loss else loss_value.item()
+
+        def _zero_loss_like(x):
+            """返回一个 0 loss（支持梯度回传）"""
+            return torch.tensor(0.0, device=x.device, requires_grad=True)
+
+        # 形状检查
+        if lora_CLIP_MB_rep.shape != gt_MB_rep.shape:
+            print(f"[WARNING] MB Shape mismatch: lora {lora_CLIP_MB_rep.shape} vs gt {gt_MB_rep.shape}")
+            debug_losses["mb_lora_vs_gt"] = (
+                _zero_loss_like(lora_CLIP_MB_rep) if use_supervision_loss else float("nan")
+            )
+            return debug_losses
+
+        B, T, D = lora_CLIP_MB_rep.shape
+
+        # -------------------------------------------------
+        # 构造 motion mask [B, 28, D]
+        # -------------------------------------------------
+        frame_group_count, frames_per_group, tokens_per_group = 4, 49, 7
+        fuse_mask_4 = (
+            motion_lens_tensor.view(-1, 1) >= torch.arange(1, frame_group_count + 1, device=device) * frames_per_group
+        )  # [B, 4]
+        motion_mask = (
+            fuse_mask_4.unsqueeze(-1)
+            .expand(-1, -1, tokens_per_group)
+            .reshape(B, 28)
+            .unsqueeze(-1)
+            .expand(B, 28, D)
+            .float()
+        )
+
+        # -------------------------------------------------
+        # 逐元素 MSE 并应用 mask
+        # -------------------------------------------------
+        elementwise_loss = (lora_CLIP_MB_rep - gt_MB_rep) ** 2
+        masked_loss = elementwise_loss * motion_mask
+
+        # 归一化
+        num_valid_elements = motion_mask.sum()
+        if num_valid_elements > 0:
+            mb_loss = masked_loss.sum() / num_valid_elements
+        else:
+            mb_loss = _zero_loss_like(lora_CLIP_MB_rep)
+
+        debug_losses["mb_lora_vs_gt"] = _finalize_loss(mb_loss)
+        return debug_losses
+    
     def forward(self, x, timesteps, y=None):
         """
         x: [batch_size, njoints, nfeats, max_frames], denoted x_t in the paper
@@ -509,57 +584,32 @@ class MDM(nn.Module):
 
         force_mask = y.get('uncond', False)
         if 'text' in self.cond_mode:
-            if 'text_embed' in y:  # caching option
-                enc_text = y['text_embed']
-            else:
-                ## 使用bert来encoder text代码
-                enc_text = self.bert_encode_text_lora(y['text'])
-                ori_CLIP_cls_emb = self.bert_encode_text_ori(y['text'])
-                if type(enc_text) == tuple:
-                    enc_text, text_mask = enc_text
-                    text_emb = self.embed_text(enc_text)
-                    ori_CLIP_cls_emb, text_mask_ori = ori_CLIP_cls_emb
-                    ori_CLIP_cls_emb_512 = self.embed_text(ori_CLIP_cls_emb)
-
-                    if text_mask.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
-                        text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
+            # if 'text_embed' in y:  # caching option
+            #     enc_text = y['text_embed']
+            ori_CLIP_cls_emb = self.bert_encode_text_ori(y['text'])
+            if type(ori_CLIP_cls_emb) == tuple:
+                ori_CLIP_cls_emb, text_mask_ori = ori_CLIP_cls_emb
+                if text_mask_ori.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
+                    text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
                 
-                false_counts = (~text_mask).sum(dim=1)  ## 统计整一个seq有效token的长度，之后要取出text token和motion token
-                lora_CLIP_MB_rep = self.extract_special_range(text_emb, false_counts, start_offset=-31, end_offset=-3)  ## 提取distillBert的MB结果
-
+                ori_out, pred_motion_tokens = self.extended_proj_model(ori_CLIP_cls_emb)    ## 这里的ori_out其实也是做了self attn，可以试试看用不用,使用原来的ori_CLIP_cls_emb
+                pred_motion_tokens = self.motion_token_dim_proj(pred_motion_tokens)
                 gt_MB_rep = y.get('motion_token_emb', None)
-                if gt_MB_rep is not None:
-                    self.last_debug_losses = self._compute_debug_losses(
-                        enc_text, ori_CLIP_cls_emb, lora_CLIP_MB_rep, gt_MB_rep, y['lengths'], text_mask = text_mask_ori
-                    )
-                
-                ## 注意要直接对这个text_emb来做处理
-                bs = text_emb.shape[1]
-                text_len_ori = (~text_mask_ori).sum(dim=1)
-                gt_rep_list = []
-                for i in range(bs):
-                ## text_emb直接使用
-                ## ori_CLIP_cls_emb 和 gt_MB_rep 进行插入cat，还得通过self.embed_text这一层,但是还少了俩个start of motion和end of motion的token应该怎么办  
-                    text_len =  text_len_ori[i].item()
-                    data = ori_CLIP_cls_emb_512[:, i:i+1, :]
-                    insert_position = text_len-1
-                    gt=gt_MB_rep[i:i+1]
-                    start_of_motion = torch.zeros((1,1,512), device=gt_MB_rep.device)
-                    end_of_motion = torch.zeros((1,1,512), device=gt_MB_rep.device)
-                    ori_info = torch.cat((data[:insert_position],start_of_motion,  gt.permute(1,0,2),end_of_motion, data[insert_position:]), dim = 0)
-                    gt_rep_list.append(ori_info)
-                gt_rep = torch.cat(gt_rep_list, dim=1)
 
-                if z_config.get_diy_config().training_input.use_cls_token:
-                    use_gt=False
-                    if not use_gt:
-                        eval_time = y.get("eval_time", False)
-                        if not eval_time:
-                            text_emb = torch.cat((gt_rep[:, :bs//2], text_emb[:, bs//2:]), dim =1)
-                    else:
-                        text_emb = gt_rep
+                self.last_debug_losses = self.compute_mb_rep_loss(
+                    lora_CLIP_MB_rep=pred_motion_tokens.permute(1,0,2),
+                    gt_MB_rep=gt_MB_rep,
+                    motion_lens_tensor=y['lengths'],
+                )
 
+                enc_text = self.embed_text(ori_CLIP_cls_emb)
+                text_emb = torch.cat((enc_text, pred_motion_tokens), dim=0)
 
+                if z_config.get_diy_config().training_input.use_cls_token:  ## 目前全使用的是bert出来的gt
+                    bs = enc_text.shape[1]
+                    gt_branch = torch.cat((enc_text, gt_MB_rep.permute(1,0,2)), dim = 0)
+                    pred_branch = torch.cat((enc_text, pred_motion_tokens), dim = 0)
+                    text_emb = torch.cat((gt_branch[:, :bs//2], pred_branch[:, bs//2:]),dim=1)
 
                 
                 if False:
@@ -791,7 +841,8 @@ class MDM(nn.Module):
                 if self.text_encoder_type == 'clip':
                     output = self.seqTransDecoder(tgt=xseq, memory=emb, tgt_key_padding_mask=frames_mask)
                 elif self.text_encoder_type == 'bert':
-                    output = self.seqTransDecoder(tgt=xseq, memory=emb, memory_key_padding_mask=text_mask, tgt_key_padding_mask=frames_mask)  # Rotem's bug fix
+                    expanded_mask = self.expand_text_mask(text_mask_ori, total_len=78)
+                    output = self.seqTransDecoder(tgt=xseq, memory=emb, memory_key_padding_mask=expanded_mask, tgt_key_padding_mask=frames_mask)  # Rotem's bug fix
                 else:
                     raise ValueError()
 
@@ -813,7 +864,22 @@ class MDM(nn.Module):
              return output, self.last_debug_losses
         else:
             return output
-        
+    
+    def expand_text_mask(self, text_mask_ori, total_len=78):
+        """
+        将 text_mask_ori 从原长度扩展到 total_len，
+        在末尾补充 False（表示有效，不屏蔽）。
+        """
+        B, L = text_mask_ori.shape
+        if L >= total_len:
+            # 截断（一般不会发生，但安全起见）
+            return text_mask_ori[:, :total_len]
+
+        pad_len = total_len - L
+        pad_part = torch.zeros(B, pad_len, dtype=torch.bool, device=text_mask_ori.device)
+        expanded_mask = torch.cat([text_mask_ori, pad_part], dim=1)
+        return expanded_mask
+
     def add_motion_tokens_lora(self, texts, motion_token="<motion_token>", start_token="<start_of_motion>", end_token="<end_of_motion>", num_start=28):
         processed = []
         for t in texts:
@@ -832,9 +898,6 @@ class MDM(nn.Module):
         return enc_text, mask
 
     def bert_encode_text_ori(self, raw_text):
-        # enc_text = self.clip_model(raw_text)
-        # enc_text = enc_text.permute(1, 0, 2)
-        # return enc_text
         enc_text, mask = self.clip_model_ori(raw_text)  # self.clip_model.get_last_hidden_state(raw_text, return_mask=True)  # mask: False means no token there
         enc_text = enc_text.permute(1, 0, 2)
         mask = ~mask  # mask: True means no token there, we invert since the meaning of mask for transformer is inverted  https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html
@@ -849,6 +912,45 @@ class MDM(nn.Module):
         super().train(*args, **kwargs)
         self.rot2xyz.smpl_model.train(*args, **kwargs)
 
+class ExtendedTransformerEncoder(nn.Module):
+    def __init__(self, embed_dim=768, num_heads=8, num_layers=1, add_tokens=28):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.add_tokens = add_tokens
+        
+        # 可学习的 28 个 token embeddings
+        self.learnable_tokens = nn.Parameter(torch.randn(add_tokens, 1, embed_dim))
+        nn.init.xavier_uniform_(self.learnable_tokens)  # 更好的初始化
+
+        # Transformer Encoder Layer(s)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=num_heads,
+            dim_feedforward=embed_dim * 4,
+            dropout=0.1,
+            activation='relu',
+            batch_first=False  # 注意这里保持默认值，因为输入输出形状为 (seq_len, batch_size, feature)
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+    def forward(self, x):
+        # x: [50, 64, 768]
+        original_seq_len, batch_size, _ = x.size()
+
+        # 扩展 learnable_tokens 到 batch_size
+        learned = self.learnable_tokens.expand(-1, batch_size, -1)  # [28, 64, 768]
+
+        # 拼接原始 token 和 learnable token
+        combined = torch.cat([x, learned], dim=0)  # [78, 64, 768]
+
+        # 经过 Transformer Encoder
+        output = self.transformer_encoder(combined)  # [78, 64, 768]
+
+        # 分离出原始部分和新增的 28 个 token
+        ori_output = output[:original_seq_len, :, :]          # [50, 64, 768]
+        new_output = output[original_seq_len:, :, :]         # [28, 64, 768] ← 这是你想监督的部分！
+
+        return ori_output, new_output
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
