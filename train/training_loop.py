@@ -31,6 +31,8 @@ from torch.amp import autocast, GradScaler
 import z_config
 import loratorch as lora
 
+import torch.nn.functional as F
+
 
 # For ImageNet experiments, this was a good default value.
 # We found that the lg_loss_scale quickly climbed to
@@ -39,7 +41,7 @@ INITIAL_LOG_LOSS_SCALE = 20.0
 
 
 class TrainLoop:
-    def __init__(self, args, train_platform, model, diffusion, data):
+    def __init__(self, args, train_platform, model, diffusion, data, vae_model=None):
         self.args = args
         self.dataset = args.dataset
         self.train_platform = train_platform
@@ -131,6 +133,8 @@ class TrainLoop:
         self.use_ddp = False
         self.ddp_model = self.model
 
+        self.vae_model=vae_model
+
     def _load_and_sync_parameters(self):
         resume_checkpoint = self.find_resume_checkpoint() or self.resume_checkpoint
 
@@ -220,6 +224,21 @@ class TrainLoop:
                                                       cond['lengths'], 
                                                       self.data.dataset.t2m_dataset.opt.joints_num, self.model.all_goal_joint_names, cond['target_joint_names'], cond['is_heading']).detach()
 
+    def adaptive_time_pooling(self, data, target_time):
+        # data: [B, T, J, D]
+        B, T, J, D = data.shape
+        
+        # 调整维度顺序以适应1D池化: [B, J*D, T]
+        x = data.permute(0, 2, 3, 1).reshape(B, J * D, T)  # [B, J*D, T]
+        
+        # 使用自适应平均池化，直接指定输出长度为 target_time
+        x_pooled = F.adaptive_avg_pool1d(x, output_size=target_time)  # [B, J*D, target_time]
+        
+        # 恢复原始维度顺序: [B, target_time, J, D]
+        x_pooled = x_pooled.view(B, J, D, target_time).permute(0, 3, 1, 2)
+    
+        return x_pooled
+    
     def run_loop(self):
         print('train steps:', self.num_steps)
         for epoch in range(self.num_epochs):
@@ -231,6 +250,10 @@ class TrainLoop:
                 self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency，这里应该是生成条件控制的代码，没有启用
                 motion = motion.to(self.device)
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
+
+                motion_3d_emb, _ = self.vae_model.encode(motion.squeeze().permute(0,2,1))
+                pooled_3d_emb = self.adaptive_time_pooling(motion_3d_emb, target_time=4)
+                cond['y'].update({"pooled_3d_emb_gt": pooled_3d_emb})
 
                 self.run_step(motion, cond)
                 if self.total_step() % self.log_interval == 0:

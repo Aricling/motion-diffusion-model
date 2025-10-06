@@ -15,6 +15,8 @@ from train.train_platforms import WandBPlatform, ClearmlPlatform, TensorboardPla
 import z_config
 import yaml
 from types import SimpleNamespace
+from vae_all.options.denoiser_option import arg_parse   ## Salad也是用的denoiser_option来初始化VAE的
+from vae_all.utils.load_vae import load_and_freeze_vae
 
 def namespace_to_dict(ns):
     if isinstance(ns, SimpleNamespace):
@@ -53,6 +55,10 @@ def main():
 
     dist_util.setup_dist(args.device)
 
+    print("intializing VAE model")
+    vae_opt = arg_parse(True)
+    vae = load_and_freeze_vae(vae_opt)
+
     print("creating data loader...")
 
     data = get_dataset_loader(name=args.dataset, 
@@ -69,7 +75,7 @@ def main():
 
     print('Total params: %.2fM' % (sum(p.numel() for p in model.parameters_wo_clip()) / 1000000.0))
     print("Training...")
-    TrainLoop(args, train_platform, model, diffusion, data).run_loop()
+    TrainLoop(args, train_platform, model, diffusion, data, vae_model=vae).run_loop()
     train_platform.close()
 
 if __name__ == "__main__":

@@ -1,14 +1,14 @@
 ## 训练代码
 # 以微调的CLIP来训练MDM，启动代码，并且加上了在训练的时候验证
 python -m train.train_mdm \
-    --save_dir save_end2end_training_bert/1006_train_mdm_bert_additransformerEncoder_wo_sv_loss_2_branch \
+    --save_dir save_end2end_training_bert_w_SALAD_VAE/1006_train_mdm_bert_additransformerEncoder_wo_sv_loss_2_branch_w_SALAD_VAE_try1 \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \
     --text_encoder_type bert \
     --mask_frames \
     --use_ema \
-    --device 6 \
+    --device 7 \
     --overwrite \
     --train_platform_type WandBPlatform \
     --eval_during_training

@@ -63,7 +63,7 @@ class WandBPlatform(TrainPlatform):
         super().__init__(save_dir, *args, **kwargs)
         self.wandb.login(host=os.getenv("WANDB_BASE_URL"), key=os.getenv("WANDB_API_KEY"))
         self.wandb.init(
-            project='train_mdm_w_bert_pooling_additrans',
+            project='train_mdm_w_bert_pooling_additrans_w_SALAD_VAE',
             name=self.name,
             id=self.name,  # in order to send continued runs to the same record
             resume='allow',  # in order to send continued runs to the same record

@@ -203,6 +203,8 @@ class MDM(nn.Module):
                 
                 self.embed_text = nn.Linear(self.clip_dim, self.latent_dim)
                 self.motion_token_dim_proj = nn.Linear(self.clip_dim, self.latent_dim)
+
+                self.gt_3d_motion_emb_proj = nn.Linear(32, self.latent_dim)
                 
             if 'action' in self.cond_mode:
                 self.embed_action = EmbedAction(self.num_actions, self.latent_dim)
@@ -594,22 +596,30 @@ class MDM(nn.Module):
                 
                 ori_out, pred_motion_tokens = self.extended_proj_model(ori_CLIP_cls_emb)    ## 这里的ori_out其实也是做了self attn，可以试试看用不用,使用原来的ori_CLIP_cls_emb
                 pred_motion_tokens = self.motion_token_dim_proj(pred_motion_tokens)
-                gt_MB_rep = y.get('motion_token_emb', None)
-
-                self.last_debug_losses = self.compute_mb_rep_loss(
-                    lora_CLIP_MB_rep=pred_motion_tokens.permute(1,0,2),
-                    gt_MB_rep=gt_MB_rep,
-                    motion_lens_tensor=y['lengths'],
-                )
+                ## 在SALAD VAE这个branch中不应该使用这个motion_token_emb作为gt
+                # gt_MB_rep = y.get('motion_token_emb', None)
 
                 enc_text = self.embed_text(ori_CLIP_cls_emb)
                 text_emb = torch.cat((enc_text, pred_motion_tokens), dim=0)
 
                 if z_config.get_diy_config().training_input.use_cls_token:  ## 目前全使用的是bert出来的gt
-                    bs = enc_text.shape[1]
-                    gt_branch = torch.cat((enc_text, gt_MB_rep.permute(1,0,2)), dim = 0)
-                    pred_branch = torch.cat((enc_text, pred_motion_tokens), dim = 0)
-                    text_emb = torch.cat((gt_branch[:, :bs//2], pred_branch[:, bs//2:]),dim=1)
+                    eval_time = y.get("eval_time", False)
+                    if not eval_time:
+                        gt_3d_rep = y.get("pooled_3d_emb_gt", None) ##   这个就是VAE出来的结果
+                        gt_3d_rep = gt_3d_rep.reshape(gt_3d_rep.shape[0], -1, gt_3d_rep.shape[0-1])
+                        gt_3d_rep = self.gt_3d_motion_emb_proj(gt_3d_rep)
+                        self.last_debug_losses = self.compute_mb_rep_loss(
+                            lora_CLIP_MB_rep=pred_motion_tokens.permute(1,0,2),
+                            gt_MB_rep=gt_3d_rep,
+                            motion_lens_tensor=y['lengths'],
+                        )
+
+                        bs = enc_text.shape[1]
+                        gt_branch = torch.cat((enc_text, gt_3d_rep.permute(1,0,2)), dim = 0)
+                        pred_branch = torch.cat((enc_text, pred_motion_tokens), dim = 0)
+                        text_emb = torch.cat((gt_branch[:, :bs//2], pred_branch[:, bs//2:]),dim=1)
+                    else:
+                        self.last_debug_losses = None
 
                 
                 if False:
