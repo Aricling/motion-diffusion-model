@@ -1,7 +1,7 @@
 ## 训练代码
 # 以微调的CLIP来训练MDM，启动代码，并且加上了在训练的时候验证
 python -m train.train_mdm \
-    --save_dir save_end2end_training_bert_w_SALAD_VAE/1006_train_mdm_bert_additransformerEncoder_wo_sv_loss_2_branch_w_SALAD_VAE_try1 \
+    --save_dir save_end2end_training_bert_w_SALAD_VAE/1008_train_mdm_bert_additransEncoder_1_branch_gt_VAE \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \

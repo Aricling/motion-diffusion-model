@@ -49,7 +49,7 @@ def main():
         raise ValueError(f"Config file already exists at {config_path} and overwrite is not enabled.")
     else:
         with open(config_path, 'w') as f:
-            cfg_dict=namespace_to_dict(cfg)
+            cfg_dict = namespace_to_dict(cfg)
             yaml.safe_dump(cfg_dict, f, sort_keys=False)
 
 

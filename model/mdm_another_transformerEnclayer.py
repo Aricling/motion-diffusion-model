@@ -201,7 +201,11 @@ class MDM(nn.Module):
                 else:
                     raise ValueError('We only support [CLIP, BERT] text encoders') 
                 
-                self.embed_text = nn.Linear(self.clip_dim, self.latent_dim)
+                if not z_config.get_diy_config().mdm_another_transformerEnclayer.two_cls_token_use_two_linear:
+                    self.embed_text = nn.Linear(self.clip_dim, self.latent_dim)
+                else:
+                    self.embed_text_1 = nn.Linear(self.clip_dim, self.latent_dim)
+                    self.embed_text_2 = nn.Linear(self.clip_dim, self.latent_dim)
                 self.motion_token_dim_proj = nn.Linear(self.clip_dim, self.latent_dim)
 
                 self.gt_3d_motion_emb_proj = nn.Linear(32, self.latent_dim)
@@ -244,6 +248,7 @@ class MDM(nn.Module):
                     self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
 
         self.extended_proj_model = ExtendedTransformerEncoder(embed_dim=768, num_heads=8, num_layers=1, add_tokens=28)
+        self.cls_token_model = CLSTokenTransformer(embed_dim=768, num_heads=8, num_layers=2)
 
     def zero_module(self, module):
         """
@@ -594,121 +599,62 @@ class MDM(nn.Module):
                 if text_mask_ori.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
                     text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
                 
-                ori_out, pred_motion_tokens = self.extended_proj_model(ori_CLIP_cls_emb)    ## 这里的ori_out其实也是做了self attn，可以试试看用不用,使用原来的ori_CLIP_cls_emb
+                cls_token, ori_out, pred_motion_tokens = self.extended_proj_model(ori_CLIP_cls_emb)    ## 这里的ori_out其实也是做了self attn，可以试试看用不用,使用原来的ori_CLIP_cls_emb
+                cls_token_text = self.cls_token_model(ori_CLIP_cls_emb)
+                
                 pred_motion_tokens = self.motion_token_dim_proj(pred_motion_tokens)
-                ## 在SALAD VAE这个branch中不应该使用这个motion_token_emb作为gt
-                # gt_MB_rep = y.get('motion_token_emb', None)
 
-                enc_text = self.embed_text(ori_CLIP_cls_emb)
+                ## 不再需要原本的text token了，直接该用新加上的全局token
+                if not z_config.get_diy_config().mdm_another_transformerEnclayer.two_cls_token_use_two_linear:
+                    enc_text = self.embed_text(cls_token)
+                    cls_token_text = self.embed_text(cls_token_text)
+                else:
+                    enc_text = self.embed_text_1(cls_token)
+                    cls_token_text = self.embed_text_2(cls_token_text)
+                
                 text_emb = torch.cat((enc_text, pred_motion_tokens), dim=0)
 
-                if z_config.get_diy_config().training_input.use_cls_token:  ## 目前全使用的是bert出来的gt
-                    eval_time = y.get("eval_time", False)
-                    if not eval_time:
-                        gt_3d_rep = y.get("pooled_3d_emb_gt", None) ##   这个就是VAE出来的结果
-                        gt_3d_rep = gt_3d_rep.reshape(gt_3d_rep.shape[0], -1, gt_3d_rep.shape[0-1])
+                if z_config.get_diy_config().training_input.use_cls_token:  # 当前使用 BERT 的 gt
+                    eval_time = y.get("eval_time", False)                                                                                                                                               
+                    use_gt = False
+
+                    gt_3d_rep = y.get("pooled_3d_emb_gt", None)
+                    gt_branch = None
+                    self.last_debug_losses = None
+
+                    bs = enc_text.shape[1]
+                    pred_branch = torch.cat((enc_text, pred_motion_tokens), dim=0)  # ✅ 无论 train/test 都先构造好
+
+                    # ---- 统一处理 gt branch ----
+                    if gt_3d_rep is not None:
+                        gt_3d_rep = gt_3d_rep.reshape(gt_3d_rep.shape[0], -1, gt_3d_rep.shape[-1])
                         gt_3d_rep = self.gt_3d_motion_emb_proj(gt_3d_rep)
-                        self.last_debug_losses = self.compute_mb_rep_loss(
-                            lora_CLIP_MB_rep=pred_motion_tokens.permute(1,0,2),
-                            gt_MB_rep=gt_3d_rep,
-                            motion_lens_tensor=y['lengths'],
-                        )
+                        gt_branch = torch.cat((cls_token_text, gt_3d_rep.permute(1, 0, 2)), dim=0)
 
-                        bs = enc_text.shape[1]
-                        gt_branch = torch.cat((enc_text, gt_3d_rep.permute(1,0,2)), dim = 0)
-                        pred_branch = torch.cat((enc_text, pred_motion_tokens), dim = 0)
-                        text_emb = torch.cat((gt_branch[:, :bs//2], pred_branch[:, bs//2:]),dim=1)
+                    # ---- train 模式 ----
+                    if not eval_time:
+                        if gt_3d_rep is not None:
+                            self.last_debug_losses = self.compute_mb_rep_loss(
+                                lora_CLIP_MB_rep=pred_motion_tokens.permute(1, 0, 2),
+                                gt_MB_rep=gt_3d_rep,
+                                motion_lens_tensor=y["lengths"],
+                            )
+
+                        # 混合 gt 与 pred
+                        if not z_config.get_diy_config().training_input.all_batch_using_lora_clip_out:
+                            text_emb = gt_branch if use_gt else torch.cat(
+                                (gt_branch[:, :bs // 2], pred_branch[:, bs // 2:]), dim=1
+                            )
+                        else:
+                            text_emb = pred_branch
+
+                    # ---- eval 模式 ----
                     else:
-                        self.last_debug_losses = None
-
-                
-                if False:
-                    # ----- 编码 text -----
-                    lora_enc_cls_MB, texts_len_list = self.lora_clip_encode_text(y['text'])  # [bs, 29, 512]
-                    lora_enc_cls = lora_enc_cls_MB[:, :1, :]
-                    lora_CLIP_MB_rep = lora_enc_cls_MB[:, 1:, :]
-                    ori_CLIP_cls_emb, _ = self.ori_clip_encode_text(y['text'])
-
-                    # ----- 保存 loss -----
-                    gt_MB_rep = y.get('motion_token_emb', None)
-                    if gt_MB_rep is not None:
-                        self.last_debug_losses = self._compute_debug_losses(
-                            lora_enc_cls, ori_CLIP_cls_emb, lora_CLIP_MB_rep, gt_MB_rep, y['lengths']
-                        )
-
-                    # ----- simplified data 模式 -----
-                    if z_config.get_diy_config().training.use_gt_MB_simplified_data:
-                        enc_text = torch.cat((ori_CLIP_cls_emb, gt_MB_rep), dim=1)
-                        if z_config.get_diy_config().training.use_MB_token_only:
-                            enc_text = gt_MB_rep
-
-                    # ----- end2end 训练 -----
-                    if z_config.get_diy_config().training_input.use_end2end_ding_training:
-                        eval_time = y.get("eval_time", False)
-                        bs = lora_enc_cls.shape[0]
-
-                        # --- proj 操作（按需应用）---
-                        if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                            lora_CLIP_MB_rep = self.lora_clip_MB_rep_proj(lora_CLIP_MB_rep)
-                            if gt_MB_rep is not None:
-                                gt_MB_rep = self.MB_rep_proj(gt_MB_rep)
-
-                        def _build_enc_text(mode):
-                            """
-                            mode: "eval" / "train"
-                            """
-                            if z_config.get_diy_config().training_input.use_cls_token:
-                                # cls token
-                                lora_enc_proj = self.lra_clip_proj(lora_enc_cls)
-                                ori_cls_proj = self.ori_clip_proj(ori_CLIP_cls_emb)
-
-                                if mode == "eval":
-                                    test_gt_input = False   ## 这边就是测试使用另外一条支路来构建条件咯
-                                    if test_gt_input == True:
-                                        return torch.cat((ori_cls_proj, gt_MB_rep), dim=1)
-                                    return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim=1)
-                                else:  # train: 一半gt一半lora
-                                    if z_config.get_diy_config().training_input.all_batch_using_lora_clip_out:
-                                        return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim = 1)
-                                    else:
-                                        enc_gt = torch.cat((ori_cls_proj[:bs // 2], gt_MB_rep[:bs // 2]), dim=1)
-                                        enc_lora = torch.cat((lora_enc_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
-                                    return torch.cat((enc_gt, enc_lora), dim=0)
-
-                            elif z_config.get_diy_config().training_input.not_use_cls_token:
-                                if mode == "eval":
-                                    return lora_CLIP_MB_rep
-                                else:
-                                    enc_gt = gt_MB_rep[:bs // 2]
-                                    enc_lora = lora_CLIP_MB_rep[:bs // 2]
-                                    return torch.cat((enc_gt, enc_lora), dim=0)
-
-                            elif z_config.get_diy_config().training_input.use_mean_MB_as_cls_in_gt_branch:
-                                lora_enc_proj = self.lra_clip_proj(lora_enc_cls)
-                                mean_cls_gt = torch.mean(gt_MB_rep, dim=1, keepdim=True)
-
-                                if mode == "eval":
-                                    return torch.cat((lora_enc_proj, lora_CLIP_MB_rep), dim=1)
-                                else:
-                                    enc_gt = torch.cat((mean_cls_gt[:bs // 2], gt_MB_rep[:bs // 2]), dim=1)
-                                    enc_lora = torch.cat((lora_enc_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
-                                    return torch.cat((enc_gt, enc_lora), dim=0)
-
-                            elif z_config.get_diy_config().training_input.both_use_ori_clip_cls_token:
-                                ori_cls_proj = self.ori_clip_proj(ori_CLIP_cls_emb)
-
-                                if mode == "eval":
-                                    return torch.cat((ori_cls_proj, lora_CLIP_MB_rep), dim=1)
-                                else:
-                                    enc_gt = torch.cat((ori_cls_proj[:bs // 2], gt_MB_rep[:bs // 2]), dim=1)
-                                    enc_lora = torch.cat((ori_cls_proj[:bs // 2], lora_CLIP_MB_rep[:bs // 2]), dim=1)
-                                    return torch.cat((enc_gt, enc_lora), dim=0)
-
-                            else:
-                                raise ValueError("Invalid training_input config")
-
-                        # ---- 根据 eval/train 选择拼接方式 ----
-                        enc_text = _build_enc_text("eval" if eval_time else "train")
+                        if not z_config.get_diy_config().training_input.all_batch_using_lora_clip_out:
+                            # ✅ test 也能使用 pred_branch
+                            text_emb = gt_branch if use_gt else pred_branch
+                        else:
+                            text_emb = pred_branch
 
                 
                 ## 是否进一步pooling的对比实验
@@ -851,8 +797,8 @@ class MDM(nn.Module):
                 if self.text_encoder_type == 'clip':
                     output = self.seqTransDecoder(tgt=xseq, memory=emb, tgt_key_padding_mask=frames_mask)
                 elif self.text_encoder_type == 'bert':
-                    expanded_mask = self.expand_text_mask(text_mask_ori, total_len=78)
-                    output = self.seqTransDecoder(tgt=xseq, memory=emb, memory_key_padding_mask=expanded_mask, tgt_key_padding_mask=frames_mask)  # Rotem's bug fix
+                    # expanded_mask = self.expand_text_mask(text_mask_ori, total_len=78)
+                    output = self.seqTransDecoder(tgt=xseq, memory=emb, memory_key_padding_mask=None, tgt_key_padding_mask=frames_mask)  # Rotem's bug fix
                 else:
                     raise ValueError()
 
@@ -922,6 +868,48 @@ class MDM(nn.Module):
         super().train(*args, **kwargs)
         self.rot2xyz.smpl_model.train(*args, **kwargs)
 
+class CLSTokenTransformer(nn.Module):
+    def __init__(self, embed_dim=768, num_heads=8, num_layers=1):
+        super().__init__()
+        self.embed_dim = embed_dim
+
+        # 可学习的全局 token
+        self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim))
+        nn.init.xavier_uniform_(self.cls_token)
+
+        # Transformer Encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=num_heads,
+            dim_feedforward=embed_dim * 4,
+            dropout=0.1,
+            activation='relu',
+            batch_first=False,  # 输入 (seq_len, batch, embed)
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+    def forward(self, x):
+        """
+        x: [seq_len=50, batch=64, embed=768]
+        返回:
+            global_token_output: [1, batch, embed] 经过 self-attn 后的第0号 token
+        """
+        seq_len, batch_size, _ = x.size()
+
+        # 扩展 cls_token 到 batch_size
+        cls_tok = self.cls_token.expand(-1, batch_size, -1)  # [1, 64, 768]
+
+        # 拼接 cls_token + 原始序列
+        combined = torch.cat([cls_tok, x], dim=0)  # [51, 64, 768]
+
+        # 经过 Transformer Encoder
+        output = self.transformer_encoder(combined)  # [51, 64, 768]
+
+        # 取出第0号 token（cls_token 对应）
+        global_token_output = output[0:1, :, :]  # [1, 64, 768]
+
+        return global_token_output
+
 class ExtendedTransformerEncoder(nn.Module):
     def __init__(self, embed_dim=768, num_heads=8, num_layers=1, add_tokens=28):
         super().__init__()
@@ -930,7 +918,9 @@ class ExtendedTransformerEncoder(nn.Module):
         
         # 可学习的 28 个 token embeddings
         self.learnable_tokens = nn.Parameter(torch.randn(add_tokens, 1, embed_dim))
+        self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim))
         nn.init.xavier_uniform_(self.learnable_tokens)  # 更好的初始化
+        nn.init.xavier_uniform_(self.cls_token)
 
         # Transformer Encoder Layer(s)
         encoder_layer = nn.TransformerEncoderLayer(
@@ -945,22 +935,24 @@ class ExtendedTransformerEncoder(nn.Module):
 
     def forward(self, x):
         # x: [50, 64, 768]
-        original_seq_len, batch_size, _ = x.size()
+        seq_len, batch_size, _ = x.size()
 
-        # 扩展 learnable_tokens 到 batch_size
+        # 扩展 learnable tokens 和 cls token 到 batch_size
         learned = self.learnable_tokens.expand(-1, batch_size, -1)  # [28, 64, 768]
+        cls_tok = self.cls_token.expand(-1, batch_size, -1)         # [1, 64, 768]
 
-        # 拼接原始 token 和 learnable token
-        combined = torch.cat([x, learned], dim=0)  # [78, 64, 768]
+        # 拼接顺序: [CLS] + 原始输入 + learnable tokens
+        combined = torch.cat([cls_tok, x, learned], dim=0)          # [1+50+28=79, 64, 768]
 
-        # 经过 Transformer Encoder
-        output = self.transformer_encoder(combined)  # [78, 64, 768]
+        # Transformer 编码
+        output = self.transformer_encoder(combined)                 # [79, 64, 768]
 
-        # 分离出原始部分和新增的 28 个 token
-        ori_output = output[:original_seq_len, :, :]          # [50, 64, 768]
-        new_output = output[original_seq_len:, :, :]         # [28, 64, 768] ← 这是你想监督的部分！
+        # 分离出各部分
+        cls_output = output[0:1, :, :]             # [1, 64, 768]
+        ori_output = output[1:1+seq_len, :, :]     # [50, 64, 768]
+        new_output = output[1+seq_len:, :, :]      # [28, 64, 768]
 
-        return ori_output, new_output
+        return cls_output, ori_output, new_output
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):

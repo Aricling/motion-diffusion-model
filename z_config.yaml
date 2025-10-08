@@ -21,6 +21,9 @@ training_input:
   cls_and_MB_extra_supervision_loss: False ## 指的是clip的cls token和motion bert的token之间约束的额外loss，为True的话就会有反向传播，false的话只记录不传播
   all_batch_using_lora_clip_out: false  ## 全部的64个batch都使用lora CLIP来进行生成，一般和上面这个和起来用，不让clip的MotionBert token输出就没有监督了
 
+mdm_another_transformerEnclayer:
+  two_cls_token_use_two_linear: False
+
 
 training:
   use_gt_MB_simplified_data: False  ## 这个是是否直接使用gt的cls+motion token来跑
