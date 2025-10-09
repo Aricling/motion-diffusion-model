@@ -127,7 +127,7 @@ class TrainLoop:
                 'test': lambda: eval_humanml.get_mdm_loader(self.args,
                     self.model_for_eval, diffusion, args.eval_batch_size,
                     gen_loader, mm_num_samples, mm_num_repeats, gen_loader.dataset.opt.max_motion_length,
-                    args.eval_num_samples, scale=args.gen_guidance_param,
+                    args.eval_num_samples, scale=args.gen_guidance_param, vae_model = vae_model
                 )
             }
         self.use_ddp = False

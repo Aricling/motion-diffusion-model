@@ -147,7 +147,7 @@ class CompV6GeneratedDataset(Dataset):
 
 class CompMDMGeneratedDataset(Dataset):
 
-    def __init__(self, args, model, diffusion, dataloader, mm_num_samples, mm_num_repeats, max_motion_length, num_samples_limit, scale=1.):
+    def __init__(self, args, model, diffusion, dataloader, mm_num_samples, mm_num_repeats, max_motion_length, num_samples_limit, scale=1., vae_model=None):
         self.args = args
         self.dataloader = dataloader
         self.dataset = dataloader.dataset
@@ -186,9 +186,13 @@ class CompMDMGeneratedDataset(Dataset):
 
                 if num_samples_limit is not None and len(generated_motion) >= num_samples_limit:
                     break
-
+                
                 model_kwargs['y'] = {key: val.to(dist_util.dev()) if torch.is_tensor(val) else val for key, val in model_kwargs['y'].items()}
                 motion = motion.to(dist_util.dev())
+
+                motion_3d_emb, _ = vae_model.encode(motion.squeeze().permute(0,2,1))
+                pooled_3d_emb = self.adaptive_time_pooling(motion_3d_emb, target_time=4)
+                model_kwargs['y'].update({"pooled_3d_emb_gt": pooled_3d_emb})
 
                 tokens = [t.split('_') for t in model_kwargs['y']['tokens']]
 
@@ -256,6 +260,20 @@ class CompMDMGeneratedDataset(Dataset):
         self.mm_generated_motion = mm_generated_motions
         self.w_vectorizer = dataloader.dataset.w_vectorizer
 
+    def adaptive_time_pooling(self, data, target_time):
+        # data: [B, T, J, D]
+        B, T, J, D = data.shape
+        
+        # 调整维度顺序以适应1D池化: [B, J*D, T]
+        x = data.permute(0, 2, 3, 1).reshape(B, J * D, T)  # [B, J*D, T]
+        
+        # 使用自适应平均池化，直接指定输出长度为 target_time
+        x_pooled = F.adaptive_avg_pool1d(x, output_size=target_time)  # [B, J*D, target_time]
+        
+        # 恢复原始维度顺序: [B, target_time, J, D]
+        x_pooled = x_pooled.view(B, J, D, target_time).permute(0, 3, 1, 2)
+    
+        return x_pooled
 
     def __len__(self):
         return len(self.generated_motion)

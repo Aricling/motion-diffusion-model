@@ -201,11 +201,8 @@ class MDM(nn.Module):
                 else:
                     raise ValueError('We only support [CLIP, BERT] text encoders') 
                 
-                if not z_config.get_diy_config().mdm_another_transformerEnclayer.two_cls_token_use_two_linear:
-                    self.embed_text = nn.Linear(self.clip_dim, self.latent_dim)
-                else:
-                    self.embed_text_1 = nn.Linear(self.clip_dim, self.latent_dim)
-                    self.embed_text_2 = nn.Linear(self.clip_dim, self.latent_dim)
+                self.embed_text = nn.Linear(self.clip_dim, self.latent_dim)
+
                 self.motion_token_dim_proj = nn.Linear(self.clip_dim, self.latent_dim)
 
                 self.gt_3d_motion_emb_proj = nn.Linear(32, self.latent_dim)
@@ -248,7 +245,6 @@ class MDM(nn.Module):
                     self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
 
         self.extended_proj_model = ExtendedTransformerEncoder(embed_dim=768, num_heads=8, num_layers=1, add_tokens=28)
-        self.cls_token_model = CLSTokenTransformer(embed_dim=768, num_heads=8, num_layers=2)
 
     def zero_module(self, module):
         """
@@ -600,17 +596,11 @@ class MDM(nn.Module):
                     text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
                 
                 cls_token, ori_out, pred_motion_tokens = self.extended_proj_model(ori_CLIP_cls_emb)    ## 这里的ori_out其实也是做了self attn，可以试试看用不用,使用原来的ori_CLIP_cls_emb
-                cls_token_gt = self.cls_token_model(ori_CLIP_cls_emb)
                 
                 pred_motion_tokens = self.motion_token_dim_proj(pred_motion_tokens)
 
                 ## 不再需要原本的text token了，直接该用新加上的全局token
-                if not z_config.get_diy_config().mdm_another_transformerEnclayer.two_cls_token_use_two_linear:
-                    enc_text = self.embed_text(cls_token)
-                    cls_token_gt = self.embed_text(cls_token_gt)
-                else:
-                    enc_text = self.embed_text_1(cls_token)
-                    cls_token_gt = self.embed_text_2(cls_token_gt)
+                enc_text = self.embed_text(cls_token)
                 
                 text_emb = torch.cat((enc_text, pred_motion_tokens), dim=0)
 
@@ -631,7 +621,7 @@ class MDM(nn.Module):
                         gt_3d_rep = gt_3d_rep.reshape(gt_3d_rep.shape[0], -1, gt_3d_rep.shape[-1])
                         gt_3d_rep = self.gt_3d_motion_emb_proj(gt_3d_rep)
                         if not gt_remove_cls_token:
-                            gt_branch = torch.cat((cls_token_gt, gt_3d_rep.permute(1, 0, 2)), dim=0)
+                            gt_branch = torch.cat((enc_text, gt_3d_rep.permute(1, 0, 2)), dim=0)
                         else:
                             gt_branch = gt_3d_rep.permute(1, 0, 2)
 
