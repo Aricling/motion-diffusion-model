@@ -150,3 +150,7 @@ save_end2end_training/*
 save_end2end_training_bert/
 save_end2end_training_bert_w_SALAD_VAE/
 save
+save_end2end_training_bert_w_SALAD_VAE_additransDec
+save_end2end_training_bert_w_SALAD_VAE_additransDnc
+save_end2end_training_bert_w_SALAD_VAE_same_cls
+z_utils

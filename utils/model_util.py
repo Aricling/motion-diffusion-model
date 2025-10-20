@@ -134,21 +134,21 @@ def create_gaussian_diffusion(args):
         lambda_target_loc=lambda_target_loc,
     )
 
-# def load_saved_model(model, model_path, use_avg: bool=False):  # use_avg_model
-#     state_dict = torch.load(model_path, map_location='cpu')
-#     # Use average model when possible
-#     if use_avg and 'model_avg' in state_dict.keys():
-#     # if use_avg_model:
-#         print('loading avg model')
-#         state_dict = state_dict['model_avg']
-#     else:
-#         if 'model' in state_dict:
-#             print('loading model without avg')
-#             state_dict = state_dict['model']
-#         else:
-#             print('checkpoint has no avg model, loading as usual.')
-#     load_model_wo_clip(model, state_dict)
-#     return model
+def load_saved_model(model, model_path, use_avg: bool=False):  # use_avg_model
+    state_dict = torch.load(model_path, map_location='cpu')
+    # Use average model when possible
+    if use_avg and 'model_avg' in state_dict.keys():
+    # if use_avg_model:
+        print('loading avg model')
+        state_dict = state_dict['model_avg']
+    else:
+        if 'model' in state_dict:
+            print('loading model without avg')
+            state_dict = state_dict['model']
+        else:
+            print('checkpoint has no avg model, loading as usual.')
+    load_model_wo_clip(model, state_dict)
+    return model
 
 def load_model_with_lora(model, ckpt_path, use_ema=False):
     """

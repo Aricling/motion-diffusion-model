@@ -648,7 +648,7 @@ class MDM(nn.Module):
                             # ✅ test 也能使用 pred_branch
                             text_emb = gt_branch if use_gt else pred_branch
                         else:
-                            text_emb = pred_branch
+                            text_emb = gt_branch if use_gt else pred_branch
 
                 
                 ## 是否进一步pooling的对比实验
@@ -669,8 +669,7 @@ class MDM(nn.Module):
                     enc_text = torch.cat((enc_text[:,:1,:], motion_token_emb), dim=1)
 
             ## 这里是有一个text的映射！！！得注意一下
-            if not eval_time:
-                text_emb = self.mask_cond(text_emb, force_mask=force_mask)  # casting mask for the single-prompt-for-all case
+            text_emb = self.mask_cond(text_emb, force_mask=force_mask)  # casting mask for the single-prompt-for-all case
 
             if self.emb_policy == 'add':
                 emb = text_emb + time_emb

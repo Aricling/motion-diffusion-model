@@ -1,7 +1,8 @@
 ## 训练代码
 # 以微调的CLIP来训练MDM，启动代码，并且加上了在训练的时候验证
+conda activate transformers
 python -m train.train_mdm \
-    --save_dir save_end2end_training_bert_w_SALAD_VAE/1009_train_mdm_bert_additransEnc_2_branch_wo_sv_same_cls_VAE \
+    --save_dir save_end2end_training_bert_w_SALAD_VAE_additransDec/1020_train_mdm_bert_5Enc_VAE \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \
@@ -37,8 +38,8 @@ python -m train.train_mdm \
 ## eval代码
 ## 这个跑不了，后面返回会报错，gt指的是说明后面28个token都是使用的gt的
 python -m eval.eval_humanml \
-    --model_path /home/mengqing/usr/motion-diffusion-model/save/train_mdm_w_finetuned_clip_v1_True/model000200000.pt \
-    --device 2
+    --model_path /home/mengqing/usr/motion-diffusion-model/save_end2end_training_bert_w_SALAD_VAE/1008_train_mdm_bert_additransEncoder_1_branch_gt_wo_cls_VAE_rerun/model000600000.pt \
+    --device 5
 
 ## 这个能跑,v1指的是以cross attn来进行信息注入的
 python -m eval.eval_humanml \

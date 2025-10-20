@@ -30,7 +30,7 @@ class ClassifierFreeSampleModel(nn.Module):
         y_uncond = deepcopy(y)
         y_uncond['uncond'] = True
         if z_config.get_diy_config().training_input.use_end2end_ding_training:
-            out, _ = self.model(x, timesteps, y)
+            out, _ = self.model(x, timesteps, y)    ## 多了一个debug losses的输出说是
             out_uncond, _ = self.model(x, timesteps, y_uncond)
         else:
             out = self.model(x, timesteps, y)

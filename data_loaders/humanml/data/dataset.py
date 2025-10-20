@@ -321,11 +321,15 @@ class Text2MotionDatasetV2(data.Dataset):
 
     def __getitem__(self, item):
         idx = self.pointer + item
+        # print(idx)
         key = self.name_list[idx]
         data = self.data_dict[key]
         motion, m_length, text_list = data['motion_263'], data['length'], data['text']
         # Randomly select a caption
-        text_data = random.choice(text_list)
+        if z_config.get_diy_config().debug:
+            text_data = text_list[0]
+        else:
+            text_data = random.choice(text_list)
         caption, tokens = text_data['caption'], text_data['tokens']
 
         if len(tokens) < self.opt.max_text_len:
@@ -373,6 +377,11 @@ class Text2MotionDatasetV2(data.Dataset):
             idx = 0
         if self.opt.disable_offset_aug:
             idx = random.randint(0, self.opt.unit_length)
+        ### for debug
+        if z_config.get_diy_config().debug:
+            idx = 0
+        else:
+            pass
         motion = motion[idx:idx+m_length]
 
         "Z Normalization"

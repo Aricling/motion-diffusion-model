@@ -190,6 +190,7 @@ def add_training_options(parser):
     group.add_argument("--autoregressive_include_prefix", action='store_true', help="If true, include the init prefix in the output, otherwise, will drop it.")
     group.add_argument("--autoregressive_init", default='data', type=str, choices=['data', 'isaac'], 
                         help="Sets the source of the init frames, either from the dataset or isaac init poses.")
+    group.add_argument("--debug", action="store_true", help="启动调试模式，该模式下不会保存文件，并且每个step都会执行测试")
 
 
 def add_sampling_options(parser):

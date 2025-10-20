@@ -147,25 +147,14 @@ class TrainLoop:
             logger.log(f"loading model from checkpoint: {resume_checkpoint}...")
             state_dict = dist_util.load_state_dict(
                 resume_checkpoint, map_location=dist_util.dev())
-            resume_lora = resume_checkpoint.replace("model", "lora")
-            lora_dict = dist_util.load_state_dict(
-                resume_lora, map_location=dist_util.dev()
-            )
 
             if 'model_avg' in state_dict:
                 print('loading both model and model_avg')
                 state_dict, state_dict_avg = state_dict['model'], state_dict[
                     'model_avg']
-                lora_dict, lora_dict_avg = lora_dict['lora'], lora_dict['lora_avg']
                 missing_keys = load_model_wo_clip(self.model, state_dict)
-                missing_keys_lora, unexpected_keys_lora = self.model.load_state_dict(lora_dict, strict=False)
-                assert len(unexpected_keys_lora)==0
-                # still_missing = set(missing_keys) & set(missing_keys_lora)    ## 这里是之前打开来验证的，发现应该没有什么问题
-                # print("Still missing keys:", list(still_missing))
 
                 missing_keys = load_model_wo_clip(self.model_avg, state_dict_avg)
-                missing_keys_lora, unexpected_keys_lora = self.model_avg.load_state_dict(lora_dict, strict=False)
-                assert len(unexpected_keys_lora)==0
             else:
                 load_model_wo_clip(self.model, state_dict)
                 if self.args.use_ema:
@@ -250,11 +239,15 @@ class TrainLoop:
                 self.cond_modifiers(cond['y'], motion) # Modify in-place for efficiency，这里应该是生成条件控制的代码，没有启用
                 motion = motion.to(self.device)
                 cond['y'] = {key: val.to(self.device) if torch.is_tensor(val) else val for key, val in cond['y'].items()}
-
-                motion_3d_emb, _ = self.vae_model.encode(motion.squeeze().permute(0,2,1))
-                pooled_3d_emb = self.adaptive_time_pooling(motion_3d_emb, target_time=4)
-                cond['y'].update({"pooled_3d_emb_gt": pooled_3d_emb})
-
+                
+                if not z_config.get_diy_config().debug:
+                    motion_3d_emb, _ = self.vae_model.encode(motion.squeeze().permute(0,2,1))
+                    if int(z_config.get_diy_config().VAE_emb_shape_gt.pooled_dim) !=4:
+                        pooled_3d_emb = self.adaptive_time_pooling(motion_3d_emb, target_time=int(z_config.get_diy_config().VAE_emb_shape_gt.pooled_dim))
+                    else:
+                        pooled_3d_emb = self.adaptive_time_pooling(motion_3d_emb, target_time=4)
+                    cond['y'].update({"pooled_3d_emb_gt": pooled_3d_emb})
+                
                 self.run_step(motion, cond)
                 if self.total_step() % self.log_interval == 0:
                     for k,v in logger.get_current().dumpkvs().items():
@@ -266,8 +259,9 @@ class TrainLoop:
                         else:
                             self.train_platform.report_scalar(name=k, value=v, iteration=self.total_step(), group_name='Loss')
 
-                if self.total_step() % self.save_interval == 0:
-                    self.save()
+                if self.total_step() % self.save_interval == 0 or self.args.debug:
+                    if not self.args.debug:
+                        self.save()
                     self.model.eval()
                     if self.args.use_ema:
                         self.model_avg.eval()

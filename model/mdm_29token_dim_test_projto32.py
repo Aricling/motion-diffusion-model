@@ -198,18 +198,19 @@ class MDM(nn.Module):
                     # self.clip_model = load_bert_lora(bert_model_path)  # Sorry for that, the naming is for backward compatibility
                     self.clip_model_ori = load_bert(bert_model_path)
                     self.clip_dim = 768
+                    self.diy_latent_dim = int(z_config.get_diy_config().ori_CLIP_cls_emb_proj_test_1012.target_dim)
                 else:
                     raise ValueError('We only support [CLIP, BERT] text encoders') 
                 
-                if not z_config.get_diy_config().mdm_another_transformerEnclayer.two_cls_token_use_two_linear:
-                    self.embed_text = nn.Linear(self.clip_dim, self.latent_dim)
-                else:
-                    self.embed_text_1 = nn.Linear(self.clip_dim, self.latent_dim)
-                    self.embed_text_2 = nn.Linear(self.clip_dim, self.latent_dim)
+                self.embed_text = nn.Linear(self.diy_latent_dim, self.latent_dim) ## 对于cls token的投影
 
-                self.motion_token_dim_proj = nn.Linear(self.clip_dim, self.latent_dim)
+                self.motion_token_dim_proj = nn.Linear(self.diy_latent_dim, self.latent_dim)    ## motion token送入MDM前的投影
 
-                self.gt_3d_motion_emb_proj = nn.Linear(32, self.latent_dim)
+                self.ori_bert_out_emb_proj_layer = nn.Linear(self.clip_dim, self.diy_latent_dim)    ## 对Bert出来结果的投影
+
+                self.gt_3d_motion_emb_proj = nn.Linear(32, self.latent_dim) ## 对于VAE gt motion的投影
+
+                self.pred_for_gt_loss_proj = nn.Linear(self.diy_latent_dim, 32)
                 
             if 'action' in self.cond_mode:
                 self.embed_action = EmbedAction(self.num_actions, self.latent_dim)
@@ -220,36 +221,35 @@ class MDM(nn.Module):
 
         self.rot2xyz = Rotation2xyz(device='cpu', dataset=self.dataset)
 
-        if z_config.get_diy_config().training_input.use_end2end_ding_training:
-            ## 这里相当于第一个实验和第二个实验
-            if z_config.get_diy_config().training_input.use_cls_token:
-                self.ori_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
-                self.lra_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
-                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                    self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
-                    self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
-            if z_config.get_diy_config().training_input.not_use_cls_token:
-                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                    self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
-                    self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        # if z_config.get_diy_config().training_input.use_end2end_ding_training:
+        #     ## 这里相当于第一个实验和第二个实验
+        #     if z_config.get_diy_config().training_input.use_cls_token:
+        #         self.ori_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #         self.lra_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #         if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+        #             self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #             self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #     if z_config.get_diy_config().training_input.not_use_cls_token:
+        #         if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+        #             self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #             self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
             
-            ## 这里是第三个实验
-            if z_config.get_diy_config().training_input.use_mean_MB_as_cls_in_gt_branch:
-                self.mean_motion_bert_proj = nn.Linear(self.clip_dim, self.latent_dim)
-                self.lra_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
-                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                    self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
-                    self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #     ## 这里是第三个实验
+        #     if z_config.get_diy_config().training_input.use_mean_MB_as_cls_in_gt_branch:
+        #         self.mean_motion_bert_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #         self.lra_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #         if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+        #             self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #             self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
 
-            ## 这里是第四个实验
-            if z_config.get_diy_config().training_input.both_use_ori_clip_cls_token:
-                self.ori_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
-                if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
-                    self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
-                    self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #     ## 这里是第四个实验
+        #     if z_config.get_diy_config().training_input.both_use_ori_clip_cls_token:
+        #         self.ori_clip_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #         if z_config.get_diy_config().training_input.add_proj_linear_to_MB_rep:
+        #             self.MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
+        #             self.lora_clip_MB_rep_proj = nn.Linear(self.clip_dim, self.latent_dim)
 
-        self.extended_proj_model = ExtendedTransformerEncoder(embed_dim=768, num_heads=8, num_layers=1, add_tokens=28)
-        self.cls_token_model = CLSTokenTransformer(embed_dim=768, num_heads=8, num_layers=2)
+        self.extended_proj_model = ExtendedTransformerEncoder(embed_dim=self.diy_latent_dim, num_heads=8, num_layers=1, add_tokens=28)
 
     def zero_module(self, module):
         """
@@ -526,10 +526,12 @@ class MDM(nn.Module):
             return torch.tensor(0.0, device=x.device, requires_grad=True)
 
         # 形状检查
-        assert lora_CLIP_MB_rep.shape == gt_MB_rep.shape, (
-            f"[ASSERT FAILED] lora_CLIP_MB_rep.shape = {lora_CLIP_MB_rep.shape}, "
-            f"gt_MB_rep.shape = {gt_MB_rep.shape}"
-        )
+        if lora_CLIP_MB_rep.shape != gt_MB_rep.shape:
+            print(f"[WARNING] MB Shape mismatch: lora {lora_CLIP_MB_rep.shape} vs gt {gt_MB_rep.shape}")
+            debug_losses["mb_lora_vs_gt"] = (
+                _zero_loss_like(lora_CLIP_MB_rep) if use_supervision_loss else float("nan")
+            )
+            return debug_losses
 
         B, T, D = lora_CLIP_MB_rep.shape
 
@@ -592,53 +594,51 @@ class MDM(nn.Module):
         if 'text' in self.cond_mode:
             # if 'text_embed' in y:  # caching option
             #     enc_text = y['text_embed']
-            ori_CLIP_cls_emb = self.bert_encode_text_ori(y['text'])
-            if type(ori_CLIP_cls_emb) == tuple:
-                ori_CLIP_cls_emb, text_mask_ori = ori_CLIP_cls_emb
+            ori_bert_out = self.bert_encode_text_ori(y['text'])
+            if type(ori_bert_out) == tuple:
+                ori_bert_out_emb, text_mask_ori = ori_bert_out
                 if text_mask_ori.shape[0] == 1 and bs > 1:  # casting mask for the single-prompt-for-all case
                     text_mask = torch.repeat_interleave(text_mask, bs, dim=0)
                 
-                cls_token, ori_out, pred_motion_tokens = self.extended_proj_model(ori_CLIP_cls_emb)    ## 这里的ori_out其实也是做了self attn，可以试试看用不用,使用原来的ori_CLIP_cls_emb
-                cls_token_gt = self.cls_token_model(ori_CLIP_cls_emb)
+                ori_bert_out_emb_projed = self.ori_bert_out_emb_proj_layer(ori_bert_out_emb)
+
+                cls_token, ori_out, pred_motion_tokens = self.extended_proj_model(ori_bert_out_emb_projed)    ## 这里的ori_out其实也是做了self attn，可以试试看用不用,使用原来的ori_CLIP_cls_emb
                 
-                pred_motion_tokens = self.motion_token_dim_proj(pred_motion_tokens)
+                pred_motion_tokens_2 = self.motion_token_dim_proj(pred_motion_tokens) ## 这个就应该是重新映射回512的
 
                 ## 不再需要原本的text token了，直接该用新加上的全局token
-                if not z_config.get_diy_config().mdm_another_transformerEnclayer.two_cls_token_use_two_linear:
-                    enc_text = self.embed_text(cls_token)
-                    cls_token_gt = self.embed_text(cls_token_gt)
-                else:
-                    enc_text = self.embed_text_1(cls_token)
-                    cls_token_gt = self.embed_text_2(cls_token_gt)
+                enc_text = self.embed_text(cls_token)
                 
-                text_emb = torch.cat((enc_text, pred_motion_tokens), dim=0)
-
                 if z_config.get_diy_config().training_input.use_cls_token:  # 当前使用 BERT 的 gt
                     eval_time = y.get("eval_time", False)                                                                                                                                               
-                    use_gt = True
-                    gt_remove_cls_token = True ## 一般设置为false，设置成True完全是为了代码的正确性
+                    use_gt = False
+                    gt_remove_cls_token = False ## 一般设置为false，设置成True完全是为了代码的正确性
 
                     gt_3d_rep  = y["pooled_3d_emb_gt"]
                     gt_branch = None
                     self.last_debug_losses = None
 
                     bs = enc_text.shape[1]
-                    pred_branch = torch.cat((enc_text, pred_motion_tokens), dim=0)  # ✅ 无论 train/test 都先构造好
+                    pred_branch = torch.cat((enc_text, pred_motion_tokens_2), dim=0)  # ✅ 无论 train/test 都先构造好
 
                     # ---- 统一处理 gt branch ----
                     if gt_3d_rep is not None:
                         gt_3d_rep = gt_3d_rep.reshape(gt_3d_rep.shape[0], -1, gt_3d_rep.shape[-1])
-                        gt_3d_rep = self.gt_3d_motion_emb_proj(gt_3d_rep)
-                        if not gt_remove_cls_token:
-                            gt_branch = torch.cat((cls_token_gt, gt_3d_rep.permute(1, 0, 2)), dim=0)
-                        else:
-                            gt_branch = gt_3d_rep.permute(1, 0, 2)
+                        # gt_3d_rep = self.gt_3d_motion_emb_proj(gt_3d_rep)
+                        # if not gt_remove_cls_token:
+                        #     gt_branch = torch.cat((enc_text, gt_3d_rep.permute(1, 0, 2)), dim=0)
+                        # else:
+                        #     gt_branch = gt_3d_rep.permute(1, 0, 2)
 
                     # ---- train 模式 ----
                     if not eval_time:
                         if gt_3d_rep is not None:
+                            if z_config.get_diy_config().ori_CLIP_cls_emb_proj_test_1012.wo_further_Mtoken_proj:
+                                pred_motion_tokens_for_loss=pred_motion_tokens
+                            else:
+                                pred_motion_tokens_for_loss = self.pred_for_gt_loss_proj(pred_motion_tokens)
                             self.last_debug_losses = self.compute_mb_rep_loss(
-                                lora_CLIP_MB_rep=pred_motion_tokens.permute(1, 0, 2),
+                                lora_CLIP_MB_rep=pred_motion_tokens_for_loss.permute(1, 0, 2),
                                 gt_MB_rep=gt_3d_rep,
                                 motion_lens_tensor=y["lengths"],
                             )
@@ -657,12 +657,7 @@ class MDM(nn.Module):
                             # ✅ test 也能使用 pred_branch
                             text_emb = gt_branch if use_gt else pred_branch
                         else:
-                            text_emb = pred_branch
-                        # print(self.compute_mb_rep_loss(
-                        #         lora_CLIP_MB_rep=pred_motion_tokens.permute(1, 0, 2),
-                        #         gt_MB_rep=gt_3d_rep,
-                        #         motion_lens_tensor=y["lengths"],
-                        #     ))
+                            text_emb = gt_branch if use_gt else pred_branch
 
                 
                 ## 是否进一步pooling的对比实验
@@ -683,10 +678,7 @@ class MDM(nn.Module):
                     enc_text = torch.cat((enc_text[:,:1,:], motion_token_emb), dim=1)
 
             ## 这里是有一个text的映射！！！得注意一下
-            # if not eval_time:
-            text_emb_input = text_emb
-            text_emb = self.mask_cond(text_emb_input, force_mask=force_mask)  # casting mask for the single-prompt-for-all case
-            # assert torch.allclose(text_emb_input, text_emb), "text_emb_input和text_emb不同"
+            text_emb = self.mask_cond(text_emb, force_mask=force_mask)  # casting mask for the single-prompt-for-all case
 
             if self.emb_policy == 'add':
                 emb = text_emb + time_emb

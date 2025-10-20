@@ -26,7 +26,7 @@ class BERT(nn.Module):
 
 
     def forward(self, texts):
-        if z_config.get_diy_config().model.MDM_model_file == "mdm_another_transformerEnclayer":
+        if z_config.get_diy_config().model.MDM_model_file in ["mdm_29token_dim_test_projto32_rm_cls", "mdm_another_transformerEnclayer", "mdm_1_transEnc_same_cls", "mdm_29token_dim_test", "mdm_29token_dim_test_projto32"]:
             encoded_inputs = self.tokenizer(
                 texts,
                 return_tensors="pt",

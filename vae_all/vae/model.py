@@ -4,6 +4,8 @@ import torch.nn as nn
 from vae_all.skeleton.linear import MultiLinear
 from vae_all.vae.encdec import MotionEncoder, MotionDecoder, STConvEncoder, STConvDecoder
 
+import z_config
+
 class VAE(nn.Module):
     def __init__(self, opt):
         super(VAE, self).__init__()
@@ -31,7 +33,15 @@ class VAE(nn.Module):
 
         # latent space
         x = self.dist(x)
-        mu, logvar = x.chunk(2, dim=-1)
+        if z_config.get_diy_config().debug:
+            mu, _ = x.chunk(2, dim=-1)
+            # 👇 加载你之前保存的 logvar，并移动到 mu 的 device 上
+            loaded_logvar = torch.load('/home/mengqing/usr/motion-diffusion-model/z_utils/saved_logvar.pt')         
+            loaded_logvar = loaded_logvar.to(mu.device)          
+            loaded_logvar = loaded_logvar.to(mu.dtype)       
+            logvar = loaded_logvar
+        else:
+            mu, logvar = x.chunk(2, dim=-1)
         z = self.reparameterize(mu, logvar)
 
         loss_kl = 0.5 * torch.mean(torch.pow(mu, 2) + torch.exp(logvar) - logvar - 1.0)

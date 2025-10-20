@@ -7,13 +7,16 @@ from data_loaders.humanml.networks.evaluator_wrapper import EvaluatorMDMWrapper
 from collections import OrderedDict
 from data_loaders.humanml.scripts.motion_process import *
 from data_loaders.humanml.utils.utils import *
-from utils.model_util import create_model_and_diffusion, load_model_with_lora
+from utils.model_util import create_model_and_diffusion, load_model_with_lora, load_saved_model
 
 from diffusion import logger
 from utils import dist_util
 from data_loaders.get_data import get_dataset_loader
 from utils.sampler_util import ClassifierFreeSampleModel
 from train.train_platforms import ClearmlPlatform, TensorboardPlatform, NoPlatform, WandBPlatform  # required for the eval operation
+
+from vae_all.options.denoiser_option import arg_parse   ## Salad也是用的denoiser_option来初始化VAE的
+from vae_all.utils.load_vae import load_and_freeze_vae
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
@@ -301,8 +304,14 @@ if __name__ == '__main__':
     dist_util.setup_dist(args.device)
     logger.configure()
 
+    print("intializing VAE model")
+    vae_opt = arg_parse(True)
+    vae = load_and_freeze_vae(vae_opt)
+
     logger.log("creating data loader...")
+    ## 修改训练还是测试集应该在这里改
     split = 'test'
+    # split = 'train'
     gt_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split=split, hml_mode='gt')
     # gen_loader = get_dataset_loader(name=args.dataset, batch_size=args.batch_size, num_frames=None, split=split, hml_mode='eval')
     # added new features + support for prefix completion:
@@ -316,7 +325,7 @@ if __name__ == '__main__':
     model, diffusion = create_model_and_diffusion(args, gen_loader)
 
     logger.log(f"Loading checkpoints from [{args.model_path}]...")
-    load_model_with_lora(model, args.model_path, use_ema=args.use_ema)
+    load_saved_model(model, args.model_path, use_avg=args.use_ema)
 
     if args.guidance_param != 1:
         model = ClassifierFreeSampleModel(model)   # wrapping model with the classifier-free sampler
@@ -331,7 +340,7 @@ if __name__ == '__main__':
             model=model, diffusion=diffusion, batch_size=args.batch_size,
             ground_truth_loader=gen_loader, mm_num_samples=mm_num_samples, mm_num_repeats=mm_num_repeats, 
             max_motion_length=gt_loader.dataset.opt.max_motion_length, num_samples_limit=num_samples_limit, 
-            scale=args.guidance_param
+            scale=args.guidance_param, vae_model=vae
         )
     }
 

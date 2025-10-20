@@ -6,6 +6,7 @@ from os.path import join as pjoin
 from tqdm import tqdm
 from utils import dist_util
 from utils.sampler_util import AutoRegressiveSampler
+import z_config
 
 
 def build_models(opt):
@@ -180,7 +181,6 @@ class CompMDMGeneratedDataset(Dataset):
 
         model.eval()
 
-
         with torch.no_grad():
             for i, (motion, model_kwargs) in tqdm(enumerate(dataloader)):
 
@@ -190,9 +190,13 @@ class CompMDMGeneratedDataset(Dataset):
                 model_kwargs['y'] = {key: val.to(dist_util.dev()) if torch.is_tensor(val) else val for key, val in model_kwargs['y'].items()}
                 motion = motion.to(dist_util.dev())
 
-                motion_3d_emb, _ = vae_model.encode(motion.squeeze().permute(0,2,1))
-                pooled_3d_emb = self.adaptive_time_pooling(motion_3d_emb, target_time=4)
-                model_kwargs['y'].update({"pooled_3d_emb_gt": pooled_3d_emb})
+                if vae_model is not None:
+                    motion_3d_emb, _ = vae_model.encode(motion.squeeze().permute(0,2,1))
+                    if int(z_config.get_diy_config().VAE_emb_shape_gt.pooled_dim) !=4:
+                        pooled_3d_emb = self.adaptive_time_pooling(motion_3d_emb, target_time=int(z_config.get_diy_config().VAE_emb_shape_gt.pooled_dim))
+                    else:
+                        pooled_3d_emb = self.adaptive_time_pooling(motion_3d_emb, target_time=4)
+                    model_kwargs['y'].update({"pooled_3d_emb_gt": pooled_3d_emb})
 
                 tokens = [t.split('_') for t in model_kwargs['y']['tokens']]
 
@@ -201,7 +205,7 @@ class CompMDMGeneratedDataset(Dataset):
                     model_kwargs['y']['scale'] = torch.ones(motion.shape[0],
                                                             device=dist_util.dev()) * scale
 
-                mm_num_now = len(mm_generated_motions) // dataloader.batch_size
+                # mm_num_now = len(mm_generated_motions) // dataloader.batch_size
                 is_mm = i in mm_idxs
                 repeat_times = mm_num_repeats if is_mm else 1
                 mm_motions = []
