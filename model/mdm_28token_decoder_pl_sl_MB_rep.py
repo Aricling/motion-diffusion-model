@@ -203,8 +203,8 @@ class MDM(nn.Module):
                 
                 # self.embed_text = nn.Linear(self.diy_latent_dim, self.latent_dim) ## 对于cls token的投影
 
-                self.motion_token_dim_proj1 = nn.Linear(self.diy_latent_dim, 32)    ## motion token送入MDM前的投影
-                self.motion_token_dim_proj2 = nn.Linear(32, self.latent_dim)
+                # self.motion_token_dim_proj1 = nn.Linear(self.diy_latent_dim, 32)    ## motion token送入MDM前的投影
+                self.motion_token_dim_proj2 = nn.Linear(self.latent_dim, self.latent_dim)
 
                 self.ori_bert_out_emb_proj_layer = nn.Linear(self.clip_dim, self.diy_latent_dim)    ## 对Bert出来结果的投影
 
@@ -603,12 +603,12 @@ class MDM(nn.Module):
                 pred_motion_tokens = self.extended_proj_model(ori_bert_out_emb_projed)    ## 这里的ori_out其实也是做了self attn，可以试试看用不用,使用原来的ori_CLIP_cls_emb
                 
                 if z_config.get_diy_config().training_input.use_cls_token:  # 当前使用 BERT 的 gt
-                    pred_motion_tokens = self.motion_token_dim_proj1(pred_motion_tokens)
+                    # pred_motion_tokens = self.motion_token_dim_proj1(pred_motion_tokens)
 
                     if z_config.get_diy_config().training_input.use_cls_token:  # 当前使用 BERT 的 gt
                         eval_time = y.get("eval_time", False)
                         use_gt = z_config.get_diy_config().training_input.use_gt_for_training
-                        use_MB_gt = False ## 是否使用MB的gt，False就为默认VAE的gt
+                        use_MB_gt = True ## 是否使用MB的gt，False就为默认VAE的gt
 
                         if use_MB_gt:
                             gt_3d_rep = y['motion_token_emb'].reshape(64, 4, 7, 512)
@@ -653,13 +653,6 @@ class MDM(nn.Module):
 
                                 # ---------- 将 token_mask 展平成 (bs, T*J) 并应用到 pred ----------
                                 token_mask_flat = token_mask.reshape(bs, -1)  # (bs, T*J)
-                                # 检查长度一致性（防止意外）
-                                # if token_mask_flat.shape[1] != pred_branch.shape[0]:
-                                #     # 如果不一致，尝试广播/插值（但根据你的说明，应当一一对应）
-                                #     # 这里我们尝试 nearest repeat/interpolate safeguard
-                                #     token_mask_flat = torch.nn.functional.interpolate(
-                                #         token_mask_flat.float().unsqueeze(1), size=pred_branch.shape[0], mode='nearest'
-                                #     ).squeeze(1).bool()
 
                                 # pred_branch: [T_pred, bs, C_pred] -> permute到 [bs, T_pred, C_pred]
                                 pred_branch = pred_branch.permute(1, 0, 2)  # [bs, T*J, C_pred]

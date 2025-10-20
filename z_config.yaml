@@ -7,9 +7,9 @@ model:
   # MDM_model_file: mdm_add_embed_motion
   clip_unfreeze_last_n_layers: 3  ## 关于是否要解冻CLIP后面几层的参数，这个参数是0的话，就不会解冻
   # MDM_model_file: mdm_another_transformerEnclayer
-  MDM_model_file: mdm_28token_encoder_mcl
+  MDM_model_file: mdm_28token_decoder_pl_sl_MB_rep
 
-  encoder_or_decoder_layers: 5  ## 测试使用多少层的Layer，decoder目前测出来最好是3层
+  encoder_or_decoder_layers: 3  ## 测试使用多少层的Layer，decoder目前测出来最好是3层
 
 ## 针对于端到端训练所采用的一些参数
 training_input:
@@ -22,7 +22,7 @@ training_input:
   add_proj_linear_to_MB_rep: false
 
   cls_and_MB_extra_supervision_loss: True ## 指的是clip的cls token和motion bert的token之间约束的额外loss，为True的话就会有反向传播，false的话只记录不传播
-  all_batch_using_lora_clip_out: true  ## 全部的64个batch都使用lora CLIP来进行生成，一般和上面这个和起来用，不让clip的MotionBert token输出就没有监督了
+  all_batch_using_lora_clip_out: False  ## 全部的64个batch都使用lora CLIP来进行生成，一般和上面这个和起来用，不让clip的MotionBert token输出就没有监督了
 
   gt_mask_mode: 2 # 当使用gt时，进行part的mask
   mask_probility: 0.0   # 上面对应gt_mask_mode drop的概率
