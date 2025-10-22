@@ -611,7 +611,7 @@ class MDM(nn.Module):
                         use_MB_gt = True ## 是否使用MB的gt，False就为默认VAE的gt
 
                         if use_MB_gt:
-                            gt_3d_rep = y['motion_token_emb'].reshape(64, 4, 7, 512)
+                            gt_3d_rep = y['motion_token_emb'].reshape(-1, 4, 7, 512)
                         else:
                             gt_3d_rep = y["pooled_3d_emb_gt"]  # [64, 4, 7, 32] ## VAE的结果
                         gt_branch = None

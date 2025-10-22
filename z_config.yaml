@@ -1,57 +1,99 @@
-model:
-  clip_model_path: save/finetune_clip_all__layers/model000450000.pt ## 这个全finetune的是loss最小的，就先用这个
-  # clip_model_path: save/finetune_clip_use_multiview/model000450000.pt ## 这个是multiview的权重
-  clip_use_sen_emb: True  ## 这个加了发现是很有用的，之后就用这个True
-  use_avg_clip_model: True
-  use_contronet_injection: false ## 这个置为True时，目前代码中arch一定得是encoder，decoder就不支持，也没有必要用controlnet注入
-  # MDM_model_file: mdm_add_embed_motion
-  clip_unfreeze_last_n_layers: 3  ## 关于是否要解冻CLIP后面几层的参数，这个参数是0的话，就不会解冻
-  # MDM_model_file: mdm_another_transformerEnclayer
-  MDM_model_file: mdm_28token_decoder_pl_sl_MB_rep
+# model:
+#   clip_model_path: save/finetune_clip_all__layers/model000450000.pt ## 这个全finetune的是loss最小的，就先用这个
+#   # clip_model_path: save/finetune_clip_use_multiview/model000450000.pt ## 这个是multiview的权重
+#   clip_use_sen_emb: True  ## 这个加了发现是很有用的，之后就用这个True
+#   use_avg_clip_model: True
+#   use_contronet_injection: false ## 这个置为True时，目前代码中arch一定得是encoder，decoder就不支持，也没有必要用controlnet注入
+#   # MDM_model_file: mdm_add_embed_motion
+#   clip_unfreeze_last_n_layers: 3  ## 关于是否要解冻CLIP后面几层的参数，这个参数是0的话，就不会解冻
+#   # MDM_model_file: mdm_another_transformerEnclayer
+#   MDM_model_file: mdm_28token_decoder_pl_sl_MB_rep
 
-  encoder_or_decoder_layers: 3  ## 测试使用多少层的Layer，decoder目前测出来最好是3层
+#   encoder_or_decoder_layers: 3  ## 测试使用多少层的Layer，decoder目前测出来最好是3层
 
-## 针对于端到端训练所采用的一些参数
-training_input:
-  use_end2end_ding_training: True ## 这个相当于这整条branch的开关，在这个git branch中，应该设置为True
+# ## 针对于端到端训练所采用的一些参数
+# training_input:
+#   use_end2end_ding_training: True ## 这个相当于这整条branch的开关，在这个git branch中，应该设置为True
   
-  use_cls_token: True ## 这个在这个实验中只是一个开关
-  not_use_cls_token: False
+#   use_cls_token: True ## 这个在这个实验中只是一个开关
+#   not_use_cls_token: False
+#   use_mean_MB_as_cls_in_gt_branch: false
+#   both_use_ori_clip_cls_token: false
+#   add_proj_linear_to_MB_rep: false
+
+#   cls_and_MB_extra_supervision_loss: True ## 指的是clip的cls token和motion bert的token之间约束的额外loss，为True的话就会有反向传播，false的话只记录不传播
+#   all_batch_using_lora_clip_out: false  ## 全部的64个batch都使用lora CLIP来进行生成，一般和上面这个和起来用，不让clip的MotionBert token输出就没有监督了
+
+#   gt_mask_mode: 2 # 当使用gt时，进行part的mask
+#   mask_probility: 0.4   # 上面对应gt_mask_mode drop的概率
+#   use_gt_for_training: false ## 是否只使用gt用于预测和训练
+#   motion_centric_loss_strength: 0.01  ## 只有MDM_model_file是mdm_28token_decoder_motion_centric_loss的时候，这个参数才会有作用，0的时候就是gt支路完全不受影响，1就是和我之前做的一样的
+
+# VAE_emb_shape_gt: ## 这个是VAE的gt做adaptive pooling时间上的维度，是pooling到4还是1，默认是4
+#   pooled_dim: 4
+
+# ori_CLIP_cls_emb_proj_test_1012:  ## 这个实验是把出来的Bert进行一个映射，下面的target_dim就是想要映射到的维度
+#   target_dim: 512
+#   wo_further_Mtoken_proj: false ##必须上面的traget_dim=32的时候才能用，因为VAE维度也是32，其他时候都得是False
+
+# mdm_another_transformerEnclayer:
+#   ## 这个指的是通过text emb,text+added motiontoken通过不同transformerEncoderLayer之后得到的全局cls1,2是否通过不同的linear，32+32的setting才会有使用
+#   two_cls_token_use_two_linear: false
+
+# training:
+#   use_gt_MB_simplified_data: False  ## 这个是是否直接使用gt的cls+motion token来跑
+#   use_MB_token_only: False  ## 在上面使用gt的基础上，是否删除cls loss的实验
+#   use_multiview_training: False ## 现在是直接使用multiview trained CLIP，这个参数好像就没什么用了
+#   split_info_injection: False ## 如果这个为False，下面的那个split_info_version参数就不会被用到
+#   split_info_version: 2
+
+# data:
+#   MB_simplified_data_path: /data/mengqing/HumanML3D_MB_rep_pooling_49  ## 这个参数和上面的额use_gt_MB_simplified_data有关系，为False则不会使用
+#   Temperal_further_pooling: false
+#   Joint_further_pooling: false
+
+# overwrite_config: true  ## 一般情况下默认为False，只有resume training的时候才会变成True
+# debug: false
+
+
+###########################################################################################
+model:
+  clip_model_path: save/finetune_clip_all__layers/model000450000.pt
+  clip_use_sen_emb: true
+  use_avg_clip_model: true
+  use_contronet_injection: false
+  clip_unfreeze_last_n_layers: 3
+  MDM_model_file: mdm_28token_encoder_mcl
+  encoder_or_decoder_layers: 6
+training_input:
+  use_end2end_ding_training: true
+  use_cls_token: true
+  not_use_cls_token: false
   use_mean_MB_as_cls_in_gt_branch: false
   both_use_ori_clip_cls_token: false
   add_proj_linear_to_MB_rep: false
-
-  cls_and_MB_extra_supervision_loss: True ## 指的是clip的cls token和motion bert的token之间约束的额外loss，为True的话就会有反向传播，false的话只记录不传播
-  all_batch_using_lora_clip_out: False  ## 全部的64个batch都使用lora CLIP来进行生成，一般和上面这个和起来用，不让clip的MotionBert token输出就没有监督了
-
-  gt_mask_mode: 2 # 当使用gt时，进行part的mask
-  mask_probility: 0.0   # 上面对应gt_mask_mode drop的概率
-  use_gt_for_training: false ## 是否只使用gt用于预测和训练
-  motion_centric_loss_strength: 1  ## 只有MDM_model_file是mdm_28token_decoder_motion_centric_loss的时候，这个参数才会有作用，0的时候就是gt支路完全不受影响，1就是和我之前做的一样的
-
-VAE_emb_shape_gt: ## 这个是VAE的gt做adaptive pooling时间上的维度，是pooling到4还是1，默认是4
+  cls_and_MB_extra_supervision_loss: true
+  all_batch_using_lora_clip_out: true
+  gt_mask_mode: 2
+  mask_probility: 0.0
+  use_gt_for_training: false
+  motion_centric_loss_strength: 1
+VAE_emb_shape_gt:
   pooled_dim: 4
-
-ori_CLIP_cls_emb_proj_test_1012:  ## 这个实验是把出来的Bert进行一个映射，下面的target_dim就是想要映射到的维度
+ori_CLIP_cls_emb_proj_test_1012:
   target_dim: 512
-  wo_further_Mtoken_proj: false ##必须上面的traget_dim=32的时候才能用，因为VAE维度也是32，其他时候都得是False
-
+  wo_further_Mtoken_proj: false
 mdm_another_transformerEnclayer:
-  ## 这个指的是通过text emb,text+added motiontoken通过不同transformerEncoderLayer之后得到的全局cls1,2是否通过不同的linear，32+32的setting才会有使用
   two_cls_token_use_two_linear: false
-
-
 training:
-  use_gt_MB_simplified_data: False  ## 这个是是否直接使用gt的cls+motion token来跑
-  use_MB_token_only: False  ## 在上面使用gt的基础上，是否删除cls loss的实验
-  use_multiview_training: False ## 现在是直接使用multiview trained CLIP，这个参数好像就没什么用了
-  split_info_injection: False ## 如果这个为False，下面的那个split_info_version参数就不会被用到
+  use_gt_MB_simplified_data: false
+  use_MB_token_only: false
+  use_multiview_training: false
+  split_info_injection: false
   split_info_version: 2
-
 data:
-  MB_simplified_data_path: /data/mengqing/HumanML3D_MB_rep_pooling_49  ## 这个参数和上面的额use_gt_MB_simplified_data有关系，为False则不会使用
+  MB_simplified_data_path: /data/mengqing/HumanML3D_MB_rep_pooling_49
   Temperal_further_pooling: false
   Joint_further_pooling: false
-
-overwrite_config: true  ## 一般情况下默认为False，只有resume training的时候才会变成True
+overwrite_config: true
 debug: false
