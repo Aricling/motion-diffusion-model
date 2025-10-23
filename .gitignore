@@ -147,3 +147,11 @@ dataset/t2m_test.npy
 dataset/t2m_val.npy
 vae_all/checkpoints
 save_end2end_training/*
+save_end2end_training_bert_w_SALAD_VAE/*
+save_end2end_training_bert_w_SALAD_VAE_additransDec/*
+save_end2end_training_bert_w_SALAD_VAE_additransDnc/*
+save_end2end_training_bert_w_SALAD_VAE_same_cls/*
+z_utils
+save
+save_end2end_training
+save_end2end_training_bert
