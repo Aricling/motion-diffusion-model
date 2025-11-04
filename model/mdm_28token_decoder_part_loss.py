@@ -517,12 +517,7 @@ class MDM(nn.Module):
             return torch.tensor(0.0, device=x.device, requires_grad=True)
 
         # 形状检查
-        if lora_CLIP_MB_rep.shape != gt_MB_rep.shape:
-            print(f"[WARNING] MB Shape mismatch: lora {lora_CLIP_MB_rep.shape} vs gt {gt_MB_rep.shape}")
-            debug_losses["mb_lora_vs_gt"] = (
-                _zero_loss_like(lora_CLIP_MB_rep) if use_supervision_loss else float("nan")
-            )
-            return debug_losses
+        assert(lora_CLIP_MB_rep.shape == gt_MB_rep.shape)
 
         B, T, D = lora_CLIP_MB_rep.shape
 
@@ -604,7 +599,7 @@ class MDM(nn.Module):
 
                 if z_config.get_diy_config().training_input.use_cls_token:  # 当前使用 BERT 的 gt
                     eval_time = y.get("eval_time", False)                                                                                                                                               
-                    use_gt = False
+                    use_gt = z_config.get_diy_config().training_input.use_gt_for_training
 
                     gt_3d_rep  = y["pooled_3d_emb_gt"]
                     gt_branch = None
@@ -616,8 +611,11 @@ class MDM(nn.Module):
                     # ---- 统一处理 gt branch ----
                     if gt_3d_rep is not None:
                         mask_mode = int(z_config.get_diy_config().training_input.gt_mask_mode)  # 1 / 2 / 3
-                        mask_prob = 0.6
+                        mask_prob = float(z_config.get_diy_config().training_input.mask_probility)
                         bs, T, J, C = gt_3d_rep.shape
+
+                        gt_3d_rep = self.gt_3d_motion_emb_proj(gt_3d_rep)
+                        gt_3d_rep_full = gt_3d_rep.clone().reshape(gt_3d_rep.shape[0], -1, gt_3d_rep.shape[-1])
 
                         if not eval_time:
                             if mask_mode == 1:
@@ -639,20 +637,15 @@ class MDM(nn.Module):
                                 gt_3d_rep = gt_3d_rep.masked_fill(token_mask, 0.0)
                             
                         gt_3d_rep = gt_3d_rep.reshape(gt_3d_rep.shape[0], -1, gt_3d_rep.shape[-1])
-                        gt_3d_rep = self.gt_3d_motion_emb_proj(gt_3d_rep)
                         gt_branch = gt_3d_rep.permute(1, 0, 2)
 
                     # ---- train 模式 ----
                     if not eval_time:
                         if gt_3d_rep is not None:
-                            if z_config.get_diy_config().ori_CLIP_cls_emb_proj_test_1012.wo_further_Mtoken_proj:
-                                pred_motion_tokens_for_loss=pred_motion_tokens
-                            else:
-                                # pred_motion_tokens_for_loss = self.pred_for_gt_loss_proj(pred_motion_tokens)
-                                pred_motion_tokens_for_loss = pred_motion_tokens
+                            pred_motion_tokens_for_loss = pred_motion_tokens
                             self.last_debug_losses = self.compute_mb_rep_loss(
                                 lora_CLIP_MB_rep=pred_motion_tokens_for_loss.permute(1, 0, 2),
-                                gt_MB_rep=gt_3d_rep,
+                                gt_MB_rep=gt_3d_rep_full,
                                 motion_lens_tensor=y["lengths"],
                                 align_strength=float(z_config.get_diy_config().training_input.motion_centric_loss_strength)    ## 0的时候就是gt支路完全不受影响，1就是和我之前做的一样的
                             )

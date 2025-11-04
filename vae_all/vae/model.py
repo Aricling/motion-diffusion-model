@@ -42,11 +42,12 @@ class VAE(nn.Module):
             logvar = loaded_logvar
         else:
             mu, logvar = x.chunk(2, dim=-1)
-        z = self.reparameterize(mu, logvar)
-
-        loss_kl = 0.5 * torch.mean(torch.pow(mu, 2) + torch.exp(logvar) - logvar - 1.0)
-        
-        return z, {"loss_kl": loss_kl}
+        if z_config.get_diy_config().VAE_reparam:
+            z = self.reparameterize(mu, logvar)
+            loss_kl = 0.5 * torch.mean(torch.pow(mu, 2) + torch.exp(logvar) - logvar - 1.0)      
+            return z, {"loss_kl": loss_kl}
+        else:
+            return mu, None
     
     def decode(self, x):
         x = self.conv_dec(x)

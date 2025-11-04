@@ -2,14 +2,14 @@
 # 以微调的CLIP来训练MDM，启动代码，并且加上了在训练的时候验证
 conda activate transformers
 python -m train.train_mdm \
-    --save_dir save_end2end_training_bert_w_SALAD_VAE_additransDec/1023_train_mdm_clip_mcl0.1_MB \
+    --save_dir save_end2end_training_bert_w_SALAD_VAE_additransDec/1101_train_mdm_bert_3Dec_J0.0_LinearShare_Tpool1_VAE_try1 \
     --dataset humanml \
     --diffusion_steps 50 \
     --arch trans_dec \
-    --text_encoder_type clip \
+    --text_encoder_type bert \
     --mask_frames \
     --use_ema \
-    --device 5 \
+    --device 3 \
     --overwrite \
     --train_platform_type WandBPlatform \
     --eval_during_training

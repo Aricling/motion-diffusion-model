@@ -605,90 +605,82 @@ class MDM(nn.Module):
                 if z_config.get_diy_config().training_input.use_cls_token:  # 当前使用 BERT 的 gt
                     pred_motion_tokens = self.motion_token_dim_proj1(pred_motion_tokens)
 
-                    if z_config.get_diy_config().training_input.use_cls_token:  # 当前使用 BERT 的 gt
-                        eval_time = y.get("eval_time", False)
-                        use_gt = z_config.get_diy_config().training_input.use_gt_for_training
-                        use_MB_gt = False ## 是否使用MB的gt，False就为默认VAE的gt
+                    eval_time = y.get("eval_time", False)
+                    use_gt = z_config.get_diy_config().training_input.use_gt_for_training
+                    use_MB_gt = False ## 是否使用MB的gt，False就为默认VAE的gt
 
-                        if use_MB_gt:
-                            gt_3d_rep = y['motion_token_emb'].reshape(64, 4, 7, 512)
-                        else:
-                            gt_3d_rep = y["pooled_3d_emb_gt"]  # [64, 4, 7, 32] ## VAE的结果
-                        gt_branch = None
-                        self.last_debug_losses = None
+                    if use_MB_gt:
+                        gt_3d_rep = y['motion_token_emb'].reshape(64, 4, 7, 512)
+                    else:
+                        gt_3d_rep = y["pooled_3d_emb_gt"]  # [64, 4, 7, 32] ## VAE的结果
+                    gt_branch = None
+                    self.last_debug_losses = None
 
-                        bs = pred_motion_tokens.shape[1]
-                        pred_branch = pred_motion_tokens  # [28, 64, 32]
+                    bs = pred_motion_tokens.shape[1]
+                    pred_branch = pred_motion_tokens  # [28, 64, 32]
 
-                        # ---- 统一处理 gt branch ----
-                        if gt_3d_rep is not None:
-                            mask_mode = int(z_config.get_diy_config().training_input.gt_mask_mode)  # 1/2/3
-                            mask_prob = float(z_config.get_diy_config().training_input.mask_probility)
-                            bs, T, J, C = gt_3d_rep.shape  # e.g. bs,4,7,32
-                            num_tokens = T * J  # should equal pred_branch.shape[0], i.e. 28
+                    # ---- 统一处理 gt branch ----
+                    if gt_3d_rep is not None:
+                        mask_mode = int(z_config.get_diy_config().training_input.gt_mask_mode)  # 1/2/3
+                        mask_prob = float(z_config.get_diy_config().training_input.mask_probility)
+                        bs, T, J, C = gt_3d_rep.shape  # e.g. bs,4,7,32
+                        num_tokens = T * J  # should equal pred_branch.shape[0], i.e. 28
 
-                            if not eval_time:
-                                # ---------- 生成共享 mask (token 级) ----------
-                                # 我们生成一个 token_mask_flat: shape (bs, T*J) -> 对应 gt 的 flatten token (t,j)
-                                if mask_mode == 1:
-                                    # time mask: 只按时间维决定某个时间 step 是否全部置0
-                                    time_mask = (torch.rand(bs, T, device=gt_3d_rep.device) < mask_prob)  # (bs, T)
-                                    # expand 为 (bs, T, J) 再展平
-                                    token_mask = time_mask[:, :, None].expand(-1, -1, J)  # (bs, T, J)
-                                elif mask_mode == 2:
-                                    # joint mask: 只按关节维决定某个关节是否全部置0
-                                    joint_mask = (torch.rand(bs, J, device=gt_3d_rep.device) < mask_prob)  # (bs, J)
-                                    token_mask = joint_mask[:, None, :].expand(-1, T, -1)  # (bs, T, J)
-                                elif mask_mode == 3:
-                                    # token 级 mask: 每个 (t,j) 单独随机
-                                    token_mask = (torch.rand(bs, T, J, device=gt_3d_rep.device) < mask_prob)  # (bs, T, J)
-                                else:
-                                    raise ValueError(f"Unknown mask_mode {mask_mode}")
-
-                                # 统一转换为 (bs, T, J, 1) 以便直接作用到 gt_3d_rep
-                                token_mask_gt = token_mask[:, :, :, None]  # (bs, T, J, 1)
-
-                                # ---------- 应用到 gt ----------
-                                gt_3d_rep = gt_3d_rep.masked_fill(token_mask_gt, 0.0)  # same mask
-
-                                # ---------- 将 token_mask 展平成 (bs, T*J) 并应用到 pred ----------
-                                token_mask_flat = token_mask.reshape(bs, -1)  # (bs, T*J)
-                                # 检查长度一致性（防止意外）
-                                # if token_mask_flat.shape[1] != pred_branch.shape[0]:
-                                #     # 如果不一致，尝试广播/插值（但根据你的说明，应当一一对应）
-                                #     # 这里我们尝试 nearest repeat/interpolate safeguard
-                                #     token_mask_flat = torch.nn.functional.interpolate(
-                                #         token_mask_flat.float().unsqueeze(1), size=pred_branch.shape[0], mode='nearest'
-                                #     ).squeeze(1).bool()
-
-                                # pred_branch: [T_pred, bs, C_pred] -> permute到 [bs, T_pred, C_pred]
-                                pred_branch = pred_branch.permute(1, 0, 2)  # [bs, T*J, C_pred]
-                                pred_branch = pred_branch.masked_fill(token_mask_flat[:, :, None], 0.0)
-                                pred_branch = pred_branch.permute(1, 0, 2)  # [T*J, bs, C_pred]
-
-                            # ---- reshape gt branch 并映射维度与原逻辑保持一致 ----
-                            gt_3d_rep = gt_3d_rep.reshape(bs, -1, C)  # [bs, T*J, C]
-                            gt_3d_rep = self.motion_token_dim_proj2(gt_3d_rep)  # map channels
-                            gt_branch = gt_3d_rep.permute(1, 0, 2)  # [T*J, bs, C_out]
-                            pred_branch = self.motion_token_dim_proj2(pred_branch)
-
-                        # ---- train / eval 下 text_emb 的组合逻辑不变 ----
                         if not eval_time:
-                            if gt_3d_rep is not None:
-                                self.last_debug_losses = {}
-                                self.last_debug_losses["mb_lora_vs_gt"] = torch.tensor(0.0, device=gt_3d_rep.device)
+                            # ---------- 生成共享 mask (token 级) ----------
+                            # 我们生成一个 token_mask_flat: shape (bs, T*J) -> 对应 gt 的 flatten token (t,j)
+                            if mask_mode == 1:
+                                # time mask: 只按时间维决定某个时间 step 是否全部置0
+                                time_mask = (torch.rand(bs, T, device=gt_3d_rep.device) < mask_prob)  # (bs, T)
+                                # expand 为 (bs, T, J) 再展平
+                                token_mask = time_mask[:, :, None].expand(-1, -1, J)  # (bs, T, J)
+                            elif mask_mode == 2:
+                                # joint mask: 只按关节维决定某个关节是否全部置0
+                                joint_mask = (torch.rand(bs, J, device=gt_3d_rep.device) < mask_prob)  # (bs, J)
+                                token_mask = joint_mask[:, None, :].expand(-1, T, -1)  # (bs, T, J)
+                            elif mask_mode == 3:
+                                # token 级 mask: 每个 (t,j) 单独随机
+                                token_mask = (torch.rand(bs, T, J, device=gt_3d_rep.device) < mask_prob)  # (bs, T, J)
+                            else:
+                                raise ValueError(f"Unknown mask_mode {mask_mode}")
 
-                            if not z_config.get_diy_config().training_input.all_batch_using_lora_clip_out:
-                                text_emb = gt_branch if use_gt else torch.cat(
-                                    (gt_branch[:, :bs // 2], pred_branch[:, bs // 2:]), dim=1
-                                )
-                            else:
-                                text_emb = pred_branch
+                            # 统一转换为 (bs, T, J, 1) 以便直接作用到 gt_3d_rep
+                            token_mask_gt = token_mask[:, :, :, None]  # (bs, T, J, 1)
+
+                            # ---------- 应用到 gt ----------
+                            gt_3d_rep = gt_3d_rep.masked_fill(token_mask_gt, 0.0)  # same mask
+
+                            # ---------- 将 token_mask 展平成 (bs, T*J) 并应用到 pred ----------
+                            token_mask_flat = token_mask.reshape(bs, -1)  # (bs, T*J)
+
+                            # pred_branch: [T_pred, bs, C_pred] -> permute到 [bs, T_pred, C_pred]
+                            pred_branch = pred_branch.permute(1, 0, 2)  # [bs, T*J, C_pred]
+                            pred_branch = pred_branch.masked_fill(token_mask_flat[:, :, None], 0.0)
+                            pred_branch = pred_branch.permute(1, 0, 2)  # [T*J, bs, C_pred]
+
+                        # ---- reshape gt branch 并映射维度与原逻辑保持一致 ----
+                        gt_3d_rep = gt_3d_rep.reshape(bs, -1, C)  # [bs, T*J, C]
+                        gt_3d_rep = self.motion_token_dim_proj2(gt_3d_rep)  # map channels
+                        gt_branch = gt_3d_rep.permute(1, 0, 2)  # [T*J, bs, C_out]
+                        pred_branch = self.motion_token_dim_proj2(pred_branch)
+
+                    # ---- train / eval 下 text_emb 的组合逻辑不变 ----
+                    if not eval_time:
+                        if gt_3d_rep is not None:
+                            self.last_debug_losses = {}
+                            self.last_debug_losses["mb_lora_vs_gt"] = torch.tensor(0.0, device=gt_3d_rep.device)
+
+                        if not z_config.get_diy_config().training_input.all_batch_using_lora_clip_out:
+                            text_emb = gt_branch if use_gt else torch.cat(
+                                (gt_branch[:, :bs // 2], pred_branch[:, bs // 2:]), dim=1
+                            )
                         else:
-                            if not z_config.get_diy_config().training_input.all_batch_using_lora_clip_out:
-                                text_emb = gt_branch if use_gt else pred_branch
-                            else:
-                                text_emb = gt_branch if use_gt else pred_branch
+                            text_emb = pred_branch
+                    else:
+                        if not z_config.get_diy_config().training_input.all_batch_using_lora_clip_out:
+                            text_emb = gt_branch if use_gt else pred_branch
+                        else:
+                            text_emb = gt_branch if use_gt else pred_branch
 
                 
                 ## 是否进一步pooling的对比实验
